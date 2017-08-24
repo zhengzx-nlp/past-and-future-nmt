@@ -17,7 +17,7 @@ tgt_lng=en
 train_prefix=/home/zhengzx/nematus/data/zh-en
 dev_prefix=/home/zhengzx/nematus/data/zh-en/MT03
 python -u ./nmt.py \
-  --model ${model_dir}/model.iter58000.npz \
+  --model ${model_dir}/model.npz \
   --prior_model ${train_prefix}/model-baseline-maxlen50.npz \
   --datasets ${train_prefix}/${src_lng}.txt.shuf ${train_prefix}/${tgt_lng}.txt.shuf \
   --dictionaries ${train_prefix}/${src_lng}.txt.shuf.json ${train_prefix}/${tgt_lng}.txt.shuf.json \
@@ -28,7 +28,7 @@ python -u ./nmt.py \
   --maxlen 50 \
   --optimizer adam \
   --anneal_restarts 1000 \
-  --lrate 0.0002 \
+  --lrate 0.0001 \
   --batch_size 80 \
   --dispFreq 10 \
   --finish_after 1000000 \
@@ -38,4 +38,6 @@ python -u ./nmt.py \
   --valid_datasets ${dev_prefix}/ch ${dev_prefix}/${tgt_lng}0 \
   --validFreq 100 \
   --valid_batch_size 50 \
-  --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en"
+  --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en" \
+  --start_external_valid 63 \
+  --external_validFreq 500

@@ -592,7 +592,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # h1 = h3
 
         # h_l_and_r = h1.dot()])
-        h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_], axis=h1.ndim - 1),
+        h3, r3, u3 = gru_unit_layer(tparams, h1, hr_,
                                     prefix='m_rnn_gru',
                                     m_=m_)
         h1 = h3
@@ -647,8 +647,9 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # TODO past and future layers
         # current right hidden state
         # hc = right_manipulate_layer(tparams, hc_, y_, prefix='right_manipulate_y', m_=m_)
+        # hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
+        hl = hl_
         hr = right_manipulate_layer(tparams, hr_, ctx_, prefix='right_manipulate_c', m_=m_)
-        hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
 
 
         return h2, ctx_, alpha.T, hl, hr  # pstate_, preact, preactx, r, u
