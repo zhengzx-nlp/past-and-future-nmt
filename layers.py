@@ -1376,22 +1376,25 @@ def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, pre
 
 
 def params_init_right_manipulate_layer(options, params, prefix='gru', dim_right=None, dim_h=None):
-    # params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
-    # params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
-    # params[pp(prefix, 'W')] = ortho_weight(dim_right, )
-    # params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
-    params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
+    params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
+    params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
+    params[pp(prefix, 'W')] = ortho_weight(dim_right, )
+    params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
+    # params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
+    params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
+
 
     return params
 
 
 def right_manipulate_layer(tparams, h_right_, h_, prefix='right_manipulate', m_=None):
-    # h_right_ = h_right_.dot(tparams[pp(prefix, 'W_c')])
-    # h_ = h_.dot(tparams[pp(prefix, 'W_h')])
-    # preact = h_right_ - h_
-    # preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
-    # h_right = tanh(preact)
-    h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
+    preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
+    preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
+    h_ = tanh(preact)
+
+    h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_gru', m_=m_)
+
+    # h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
     h_right = m_[:, None] * h_right + (1. - m_)[:, None] * h_right_
     return h_right
 

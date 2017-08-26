@@ -28,7 +28,7 @@ python -u ./nmt.py \
   --maxlen 50 \
   --optimizer adam \
   --anneal_restarts 1000 \
-  --lrate 0.0001 \
+  --lrate 0.0002 \
   --batch_size 80 \
   --dispFreq 10 \
   --finish_after 1000000 \
