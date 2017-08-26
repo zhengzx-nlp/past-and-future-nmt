@@ -586,16 +586,16 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # hr = right_manipulate_layer(tparams, hr_, ctx_, prefix='right_manipulate_c', m_=m_)
         # hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
         # # h_l_and_r = h1.dot()])
-        # h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl, hr], axis=h1.ndim - 1),
-        #                             prefix='m_rnn_gru',
-        #                             m_=m_)
-        # h1 = h3
-
-        # h_l_and_r = h1.dot()])
-        h3, r3, u3 = gru_unit_layer(tparams, h1, hr_,
+        h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_], axis=h1.ndim - 1),
                                     prefix='m_rnn_gru',
                                     m_=m_)
         h1 = h3
+
+        # h_l_and_r = h1.dot()])
+        # h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_,], axis=
+        #                             prefix='m_rnn_gru',
+        #                             m_=m_)
+        # h1 = h3
 
         # attention
         pstate_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att')))
@@ -647,8 +647,8 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # TODO past and future layers
         # current right hidden state
         # hc = right_manipulate_layer(tparams, hc_, y_, prefix='right_manipulate_y', m_=m_)
-        # hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
-        hl = hl_
+        hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
+        # hl = hl_
         hr = right_manipulate_layer(tparams, hr_, ctx_, prefix='right_manipulate_c', m_=m_)
 
 
@@ -1283,7 +1283,7 @@ def params_init_gru_unit(options, params, prefix='gru', dim_h=None, dim_ctx=None
     return params
 
 
-def gru_unit_layer(tparams, h_, ctx_, prefix='gru_cond', m_=None):
+def gru_unit_layer(tparams, h_, ctx_, ctx_dropout=None, rec_dropout=None, prefix='gru_cond', m_=None):
     def _slice(_x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n * dim:(n + 1) * dim]

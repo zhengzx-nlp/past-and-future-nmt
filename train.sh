@@ -39,5 +39,5 @@ python -u ./nmt.py \
   --validFreq 100 \
   --valid_batch_size 50 \
   --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en" \
-  --start_external_valid 63 \
+  --start_external_valid 61.5 \
   --external_validFreq 500

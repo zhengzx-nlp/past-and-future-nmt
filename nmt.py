@@ -149,10 +149,10 @@ def init_params(options):
 
     params = params_init_right_manipulate_layer(options, params, prefix='right_manipulate_c',
                                                 dim_right=options['dim'], dim_h=ctxdim)
-    # params = params_init_left_manipulate_layer(options, params, prefix='left_manipulate_c',
-    #                                            dim_left=options['dim'], dim_h=ctxdim)
+    params = params_init_left_manipulate_layer(options, params, prefix='left_manipulate_c',
+                                               dim_left=options['dim'], dim_h=ctxdim)
     params = params_init_gru_unit(options, params, prefix='m_rnn_gru',
-                                  dim_h=options['dim'], dim_ctx=(options['dim']))
+                                  dim_h=options['dim'], dim_ctx=(options['dim']*2))
 
     # deeper layers of the decoder
     if options['dec_depth'] > 1:
@@ -182,9 +182,9 @@ def init_params(options):
                                    ortho=False)
 
     # logit layer for past and future
-    # params = get_layer_param('ff')(options, params, prefix='ff_logit_left',
-    #                                nin=options['dim'], nout=options['dim_word'],
-    #                                ortho=False)
+    params = get_layer_param('ff')(options, params, prefix='ff_logit_left',
+                                   nin=options['dim'], nout=options['dim_word'],
+                                   ortho=False)
     params = get_layer_param('ff')(options, params, prefix='ff_logit_right',
                                    nin=options['dim'], nout=options['dim_word'],
                                    ortho=False)
@@ -196,7 +196,7 @@ def init_params(options):
                                    followed_by_softmax=True)
 
     # softmax constraints
-    # params = params_init_map_minus_layer(options, params, prefix='mm_left', dim=options['dim'])
+    params = params_init_map_minus_layer(options, params, prefix='mm_left', dim=options['dim'])
     params = params_init_map_minus_layer(options, params, prefix='mm_right', dim=options['dim'])
 
     return params
@@ -455,16 +455,16 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
                                        dropout_probability=options['dropout_hidden'],
                                        prefix='ff_logit_ctx', activ='linear')
 
-    # logit_left = get_layer_constr('ff')(tparams, next_state_left, options, dropout,
-    #                                     dropout_probability=options['dropout_hidden'],
-    #                                     prefix='ff_logit_left',
-    #                                     activ='linear')
+    logit_left = get_layer_constr('ff')(tparams, next_state_left, options, dropout,
+                                        dropout_probability=options['dropout_hidden'],
+                                        prefix='ff_logit_left',
+                                        activ='linear')
     logit_right = get_layer_constr('ff')(tparams, next_state_right, options, dropout,
                                          dropout_probability=options['dropout_hidden'],
                                          prefix='ff_logit_right',
                                          activ='linear')
 
-    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx + logit_right)
+    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx + logit_left + logit_right)
 
     # last layer
     logit_W = tparams['Wemb' + decoder_embedding_suffix].T if options['tie_decoder_embeddings'] else None
@@ -479,11 +479,11 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
     }
 
     if not one_step:
-        # proj_left_shifted = tensor.zeros_like(next_state_left)
-        # proj_left_shifted = tensor.set_subtensor(proj_left_shifted[1:], next_state_left[:-1])
-        # # restore initial state to the first dim of proj_right_shifted
-        # logit_l = map_minus_manipulate_layer(tparams, proj_left_shifted, next_state_left, options, dropout,
-        #                                      prefix='mm_left')
+        proj_left_shifted = tensor.zeros_like(next_state_left)
+        proj_left_shifted = tensor.set_subtensor(proj_left_shifted[1:], next_state_left[:-1])
+        # restore initial state to the first dim of proj_right_shifted
+        logit_l = map_minus_manipulate_layer(tparams, next_state_left, proj_left_shifted, options, dropout,
+                                             prefix='mm_left')
         #
         proj_right_shifted = tensor.zeros_like(next_state_right)
         proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state_right[:-1])
@@ -494,7 +494,7 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
         #
         # logit = [logit, logit_l, logit_r]
 
-        logit = [logit, logit_r]
+        logit = [logit, logit_l, logit_r]
 
     # pack next_states into dict() to return
     # note that next_states is a list of multi-layer decoder states
@@ -587,11 +587,11 @@ def build_model(tparams, options):
 
 
     cost = get_xent_cost(y, y_mask, logit[0], options)
-    # cost_l = get_xent_cost(y, y_mask, logit[1], options)
-    cost_r = get_xent_cost(y, y_mask, logit[-1], options)
+    cost_l = get_xent_cost(y, y_mask, logit[1], options)
+    cost_r = get_xent_cost(y, y_mask, logit[2], options)
 
-    # cost = [cost, cost_l, cost_r]
-    cost = [cost, cost_r]
+    cost = [cost, cost_l, cost_r]
+    # cost = [cost, cost_r]
 
     # print "Print out in build_model()"
     # print opt_ret
@@ -1095,18 +1095,18 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
             adjusted_lengths = numpy.array([numpy.count_nonzero(s) ** normalization_alpha for s in y_mask.T])
             pprobs[0] /= adjusted_lengths
             pprobs[1] /= adjusted_lengths
-            # pprobs[2] /= adjusted_lengths
+            pprobs[2] /= adjusted_lengths
 
         for pp in pprobs[0]:
             probs.append(pp)
         for pp in pprobs[1]:
             probs_l.append(pp)
-        # for pp in pprobs[2]:
-        #     probs_r.append(pp)
+        for pp in pprobs[2]:
+            probs_r.append(pp)
 
         logging.debug('%d samples computed' % (n_done))
-    print 'cost_r: ', numpy.mean(probs_l)
-    # print 'cost_r: ', numpy.mean(probs_r)
+    print 'cost_l: ', numpy.mean(probs_l)
+    print 'cost_r: ', numpy.mean(probs_r)
 
     return numpy.array(probs), alignments_json
 
@@ -1382,8 +1382,8 @@ def train(dim_word=512,  # word vector dimensionality
     f_log_probs = theano.function(inps, cost, profile=profile)
     logging.info('Done')
 
-    # cost = cost[0] + cost[1] + cost[2]
-    cost = cost[0] + cost[1]
+    cost = cost[0] + cost[1] + cost[2]
+    # cost = cost[0] + cost[1]
     if model_options['objective'] == 'CE':
         cost = cost.mean()
     elif model_options['objective'] == 'MRT':
