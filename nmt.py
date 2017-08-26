@@ -489,7 +489,7 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
         proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state_right[:-1])
         proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
         # restore initial state to the first dim of proj_right_shifted
-        logit_r = map_minus_manipulate_layer(tparams, next_state_right, proj_right_shifted, options, dropout,
+        logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state_right, options, dropout,
                                              prefix='mm_right')
         #
         # logit = [logit, logit_l, logit_r]
