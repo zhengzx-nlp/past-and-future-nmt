@@ -1,13 +1,14 @@
 #!/bin/sh
 
 # path to nematus ( https://www.github.com/rsennrich/nematus )
-nematus=$1
+#nematus=$1
 
 # path to moses decoder: https://github.com/moses-smt/mosesdecoder
 mosesdecoder=~/nematus/data/mosesdecoder
 
 # theano device, in case you do not want to compute on gpu, change it to cpu
-device=$2
+device=$1
+p=$2
 
 #model prefix
 #prefix=model/model.npz
@@ -22,11 +23,11 @@ saveto=$6
 mkdir -p test_trans
 
 # decode
-THEANO_FLAGS=mode=FAST_RUN,floatX=float32,device=$device,on_unused_input=warn python $nematus/translate.py \
+THEANO_FLAGS=mode=FAST_RUN,floatX=float32,device=$device,on_unused_input=warn python ./translate.py \
      -m $model_saveto \
      -i $dev \
      -o test_trans/$saveto \
-     -k 12 -n -p 1 
+     -k 12 -n -p $p
 
 ## get BLEU
 BLEU=`$mosesdecoder/scripts/generic/multi-bleu.perl -lc $ref < test_trans/$saveto | cut -f 3 -d ' ' | cut -f 1 -d ','`
