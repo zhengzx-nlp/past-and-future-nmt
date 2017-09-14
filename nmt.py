@@ -1354,6 +1354,8 @@ def train(dim_word=512,  # word vector dimensionality
         logging.info('Initializing model parameters from prior')
         params = load_params(prior_model, params,
                              exclude=[kk for kk in params.keys() if kk.startswith('decoder')])
+        params['mm_left_ff_logit_W'] = copy.copy(params['ff_logit_W'])
+        params['mm_left_ff_logit_b'] = copy.copy(params['ff_logit_b'])
 
     # load prior model if specified
     if False and prior_model:
@@ -1764,10 +1766,11 @@ def train(dim_word=512,  # word vector dimensionality
 
                         # stop
                         else:
+                            logging.info('Training ends up at lr: {}'.format(lrate))
                             logging.info('Valid {}'.format(valid_err))
-                            logging.info('Early Stop!')
-                            training_progress.estop = True
-                            break
+                            # logging.info('Early Stop!')
+                            # training_progress.estop = True
+                            # break
 
                 logging.info('Valid {} @ Epoch {}, Update {}, bad_counter {}'.format(valid_err,
                                                                      training_progress.eidx,

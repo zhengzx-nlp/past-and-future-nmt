@@ -268,7 +268,7 @@ def gru_layer(tparams, state_below, options, dropout, prefix='gru',
     # utility function to look up parameters and apply weight normalization if enabled
     def wn(param_name):
         param = tparams[param_name]
-        if options['weight_normalisation']: 
+        if options['weight_normalisation']:
             return weight_norm(param, tparams[param_name+'_wns'])
         else:
             return param
@@ -410,7 +410,7 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
         Ux_nl = ortho_weight(dim_nonlin)
         params[pp(prefix, 'Ux_nl'+suffix)] = Ux_nl
         params[pp(prefix, 'bx_nl'+suffix)] = numpy.zeros((dim_nonlin,)).astype(floatX)
-        
+
         if options['layer_normalisation']:
             params[pp(prefix,'U_nl%s_lnb' % suffix)] = scale_add * numpy.ones((2*dim)).astype(floatX)
             params[pp(prefix,'U_nl%s_lns' % suffix)] = scale_mul * numpy.ones((2*dim)).astype(floatX)
@@ -433,7 +433,7 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
                 params[pp(prefix,'Wcx%s_lns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)
             if options['weight_normalisation']:
                 params[pp(prefix,'Wc%s_wns') % suffix] = scale_mul * numpy.ones((2*dim)).astype(floatX)
-                params[pp(prefix,'Wcx%s_wns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)          
+                params[pp(prefix,'Wcx%s_wns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)
 
     # attention: combined -> hidden
     W_comb_att = norm_weight(dim, dimctx)
@@ -513,7 +513,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     dim = tparams[pp(prefix, 'Wcx')].shape[1]
 
     rec_dropout = dropout((n_samples, dim), dropout_probability_rec, num= 1 + 2 * recurrence_transition_depth)
-    
+
     # utility function to look up parameters and apply weight normalization if enabled
     def wn(param_name):
         param = tparams[param_name]
@@ -524,6 +524,11 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
     below_dropout = dropout((n_samples, dim_below),  dropout_probability_below, num=2)
     ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
+    #
+    # left_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
+    # right_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
+    extra_rec_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=8)
+    extra_ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
 
     # initial/previous state
     if init_state is None:
@@ -555,7 +560,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
     def _step_slice(m_, x_, xx_,
                     h_, ctx_, alpha_, hl_, hr_,
-                    pctx_, cc_, rec_dropout, ctx_dropout):
+                    pctx_, cc_, rec_dropout, ctx_dropout, extra_rec_dropout, extra_ctx_dropout):
         if options['layer_normalisation']:
             x_ = layer_norm(x_, tparams[pp(prefix, 'W_lnb')], tparams[pp(prefix, 'W_lns')])
             xx_ = layer_norm(xx_, tparams[pp(prefix, 'Wx_lnb')], tparams[pp(prefix, 'Wx_lns')])
@@ -587,6 +592,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
         # # h_l_and_r = h1.dot()])
         h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_], axis=h1.ndim - 1),
+                                    rec_dropout=extra_rec_dropout[0:2], ctx_dropout=extra_ctx_dropout[0:2],
                                     prefix='m_rnn_gru',
                                     m_=m_)
         h1 = h3
@@ -647,9 +653,13 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # TODO past and future layers
         # current right hidden state
         # hc = right_manipulate_layer(tparams, hc_, y_, prefix='right_manipulate_y', m_=m_)
-        hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
+        hl = left_manipulate_layer(tparams, hl_, ctx_,
+                                   rec_dropout=extra_rec_dropout[2:4], ctx_dropout=extra_ctx_dropout[2:4],
+                                   prefix='left_manipulate_c', m_=m_)
         # hl = hl_
-        hr = right_manipulate_layer(tparams, hr_, ctx_, prefix='right_manipulate_c', m_=m_)
+        hr = right_manipulate_layer(tparams, hr_, ctx_,
+                                    rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_rec_dropout[6:8],
+                                    prefix='right_manipulate_c', m_=m_)
 
 
         return h2, ctx_, alpha.T, hl, hr  # pstate_, preact, preactx, r, u
@@ -661,7 +671,8 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     shared_vars = []
 
     if one_step:
-        rval = _step(*(seqs + [init_state, init_ctx, None, init_state_left, init_state_right, pctx_, context, rec_dropout, ctx_dropout] +
+        rval = _step(*(seqs + [init_state, init_ctx, None, init_state_left, init_state_right, pctx_, context,
+                               rec_dropout, ctx_dropout, extra_rec_dropout, extra_ctx_dropout] +
                        shared_vars))
     else:
         rval, updates = theano.scan(_step,
@@ -672,7 +683,8 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
                                                                context.shape[0])),
                                                   init_state_left,
                                                   init_state_right,],
-                                    non_sequences=[pctx_, context, rec_dropout, ctx_dropout]+shared_vars,
+                                    non_sequences=[pctx_, context, rec_dropout, ctx_dropout, extra_rec_dropout,
+                                                   extra_ctx_dropout]+shared_vars,
                                     name=pp(prefix, '_layers'),
                                     n_steps=nsteps,
                                     truncate_gradient=truncate_gradient,
@@ -769,7 +781,7 @@ def lstm_layer(tparams, state_below, options, dropout, prefix='lstm',
     # utility function to look up parameters and apply weight normalization if enabled
     def wn(param_name):
         param = tparams[param_name]
-        if options['weight_normalisation']: 
+        if options['weight_normalisation']:
             return weight_norm(param, tparams[param_name+'_wns'])
         else:
             return param
@@ -923,7 +935,7 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond',
         Ux_nl = ortho_weight(dim_nonlin)
         params[pp(prefix, 'Ux_nl'+suffix)] = Ux_nl
         params[pp(prefix, 'bx_nl'+suffix)] = numpy.zeros((dim_nonlin,)).astype(floatX)
-        
+
         if options['layer_normalisation']:
             params[pp(prefix,'U_nl%s_lnb' % suffix)] = scale_add * numpy.ones((3*dim)).astype(floatX)
             params[pp(prefix,'U_nl%s_lns' % suffix)] = scale_mul * numpy.ones((3*dim)).astype(floatX)
@@ -946,7 +958,7 @@ def param_init_lstm_cond(options, params, prefix='lstm_cond',
                 params[pp(prefix,'Wcx%s_lns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)
             if options['weight_normalisation']:
                 params[pp(prefix,'Wc%s_wns') % suffix] = scale_mul * numpy.ones((3*dim)).astype(floatX)
-                params[pp(prefix,'Wcx%s_wns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)          
+                params[pp(prefix,'Wcx%s_wns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)
 
     # attention: combined -> hidden
     W_comb_att = norm_weight(dim, dimctx)
@@ -1025,7 +1037,7 @@ def lstm_cond_layer(tparams, state_below, options, dropout, prefix='lstm',
     dim = tparams[pp(prefix, 'Wcx')].shape[1]
 
     rec_dropout = dropout((n_samples, dim), dropout_probability_rec, num= 1 + 2 * recurrence_transition_depth)
-    
+
     # utility function to look up parameters and apply weight normalization if enabled
     def wn(param_name):
         param = tparams[param_name]
@@ -1283,7 +1295,7 @@ def params_init_gru_unit(options, params, prefix='gru', dim_h=None, dim_ctx=None
     return params
 
 
-def gru_unit_layer(tparams, h_, ctx_, ctx_dropout=None, rec_dropout=None, prefix='gru_cond', m_=None):
+def gru_unit_layer(tparams, h_, ctx_, rec_dropout=None, ctx_dropout=None, prefix='gru_cond', m_=None):
     def _slice(_x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n * dim:(n + 1) * dim]
@@ -1291,16 +1303,16 @@ def gru_unit_layer(tparams, h_, ctx_, ctx_dropout=None, rec_dropout=None, prefix
 
     dim = tparams[pp(prefix, 'Wx')].shape[1]
 
-    preact1 = tensor.dot(h_, tparams[pp(prefix, 'U')]) + tparams[pp(prefix, 'b')]
-    preact1 += tensor.dot(ctx_, tparams[pp(prefix, 'W')])
+    preact1 = tensor.dot(h_*rec_dropout[0], tparams[pp(prefix, 'U')]) + tparams[pp(prefix, 'b')]
+    preact1 += tensor.dot(ctx_*ctx_dropout[0], tparams[pp(prefix, 'W')])
     preact1 = tensor.nnet.sigmoid(preact1)
 
     r1 = _slice(preact1, 0, dim)
     u1 = _slice(preact1, 1, dim)
 
-    preactx1 = tensor.dot(h_, tparams[pp(prefix, 'Ux')]) + tparams[pp(prefix, 'bx')]
+    preactx1 = tensor.dot(h_*rec_dropout[1], tparams[pp(prefix, 'Ux')]) + tparams[pp(prefix, 'bx')]
     preactx1 *= r1
-    preactx1 += tensor.dot(ctx_, tparams[pp(prefix, 'Wx')])
+    preactx1 += tensor.dot(ctx_*ctx_dropout[1], tparams[pp(prefix, 'Wx')])
 
     h1 = tensor.tanh(preactx1)
 
@@ -1387,12 +1399,13 @@ def params_init_right_manipulate_layer(options, params, prefix='gru', dim_right=
     return params
 
 
-def right_manipulate_layer(tparams, h_right_, h_, prefix='right_manipulate', m_=None):
+def right_manipulate_layer(tparams, h_right_, h_, rec_dropout=None, ctx_dropout=None, prefix='right_manipulate', m_=None):
     preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
     preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
     h_ = tanh(preact)
 
-    h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_gru', m_=m_)
+    h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                    prefix=prefix + '_gru', m_=m_)
 
     # h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
     h_right = m_[:, None] * h_right + (1. - m_)[:, None] * h_right_
@@ -1409,12 +1422,13 @@ def params_init_left_manipulate_layer(options, params, prefix='gru', dim_left=No
     return params
 
 
-def left_manipulate_layer(tparams, h_left_, h_, prefix='left_manipulate', m_=None):
+def left_manipulate_layer(tparams, h_left_, h_, rec_dropout=None, ctx_dropout=None, prefix='left_manipulate', m_=None):
     # h_right_ = h_right_.dot(tparams[pp(prefix, 'W_c')])
     # h_ = h_.dot(tparams[pp(prefix, 'W_h')])
     # preact = h_right_ - h_
     # preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
     # h_right = tanh(preact)
-    h_left, r, u, = gru_unit_layer(tparams, h_left_, h_, prefix=prefix + '_gru', m_=m_)
+    h_left, r, u, = gru_unit_layer(tparams, h_left_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                   prefix=prefix + '_gru', m_=m_)
     h_left = m_[:, None] * h_left + (1. - m_)[:, None] * h_left_
     return h_left
