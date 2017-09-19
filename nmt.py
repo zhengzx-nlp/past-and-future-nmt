@@ -1198,6 +1198,7 @@ def train(dim_word=512,  # word vector dimensionality
           # Truncate BPTT gradients in the decoder to this value. Use -1 for no truncation
           layer_normalisation=False,  # layer normalisation https://arxiv.org/abs/1607.06450
           weight_normalisation=False,  # normalize weights
+          update_configs_freq=-1,
           ):
     # Model options
     model_options = OrderedDict(sorted(locals().copy().items()))
@@ -1492,6 +1493,13 @@ def train(dim_word=512,  # word vector dimensionality
         n_samples = 0
 
         for x, y in train:
+            if model_options['update_configs_freq'] > 0 \
+                    and training_progress.uidx % model_options['update_configs_freq'] == 0:
+                try:
+                    model_options = json.load(open('%s.json' % saveto))
+                except:
+                    pass
+
             training_progress.uidx += 1
             use_noise.set_value(1.)
 
@@ -1779,8 +1787,8 @@ def train(dim_word=512,  # word vector dimensionality
 
             if external_validation_script \
                     and len(training_progress.history_errs) > 0 \
-                    and numpy.array(training_progress.history_errs).min() <= training_progress.start_external_valid_at_nnl \
-                    and numpy.mod(training_progress.uidx, training_progress.external_validFreq) == 0:
+                    and numpy.array(training_progress.history_errs).min() <= model_options['start_external_valid_at_nnl'] \
+                    and numpy.mod(training_progress.uidx, model_options['external_validFreq']) == 0:
                 # reset Variables to reduces gpu mem ussage
                 # # reset optimizer parameters
                 #
@@ -1870,6 +1878,8 @@ if __name__ == '__main__':
                       help="don't reload training progress (only used if --reload is enabled)")
     data.add_argument('--overwrite', action='store_true',
                       help="write all models to same file")
+    data.add_argument('--update_configs_freq', type=int, default=-1,
+                      help="freq of update config file")
 
     network = parser.add_argument_group('network parameters')
     network.add_argument('--dim_word', type=int, default=512, metavar='INT',

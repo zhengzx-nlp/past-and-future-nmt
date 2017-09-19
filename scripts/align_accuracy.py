@@ -98,7 +98,8 @@ def main(model, dictionary, dictionary_target, source_file, target_file, gold_al
 
     # compile f_align
     logging.info('Building f_align...')
-    f_align= theano.function(inps, opt_ret['dec_alphas'], profile=profile)
+    # f_align= theano.function(inps, opt_ret['dec_alphas'], profile=profile)
+    f_align= theano.function(inps, cost, profile=profile)
     logging.info('Done')
 
     print 'Processing ', source_file, '...'
@@ -114,20 +115,24 @@ def main(model, dictionary, dictionary_target, source_file, target_file, gold_al
         x = numpy.array([x]).T
         y = numpy.array([y]).T
         return x[None, :, :], numpy.ones_like(x, dtype='float32'), y, numpy.ones_like(y, dtype='float32')
-    
+
+    start_time = datetime.datetime.now()
+    words = 0.
     for (x, y) in n_samples:
         # print x
         x, x_mask, y, y_mask = _prepare_data(x, y)
+
         att = f_align(x, x_mask, y, y_mask) # (len_y, nsample=1, len_x)
-        att = numpy.squeeze(att, 1)
-        atts.append(att.T)
+        # att = numpy.squeeze(att, 1)
+        # atts.append(att.T)
         # ipdb.set_trace()
         # print idx
-        idx += 1
-        if idx % 100 == 0:
-            print idx,
+        # idx += 1
+        # if idx % 100 == 0:
+        #     print idx,
             # break
-
+    last =  datetime.datetime.now() - start_time
+    print last.total_seconds(), len(n_samples) / last.total_seconds()
 
     def _force_decode(x, y):
         # sample given an input sequence and obtain scores

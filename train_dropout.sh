@@ -16,26 +16,31 @@ src_lng=cn
 tgt_lng=en
 train_prefix=/home/zhengzx/nematus/data/zh-en
 dev_prefix=/home/zhengzx/nematus/data/zh-en/MT03
-
 python -u ./nmt.py \
   --model ${model_dir}/model.npz \
+  --prior_model ${train_prefix}/model.zh-en.maxlen50.dropout.npz \
   --datasets ${train_prefix}/${src_lng}.txt.shuf ${train_prefix}/${tgt_lng}.txt.shuf \
   --dictionaries ${train_prefix}/${src_lng}.txt.shuf.json ${train_prefix}/${tgt_lng}.txt.shuf.json \
-  --dim_word 128 \
-  --dim 256 \
-  --n_words_src 3000 \
-  --n_words 3000 \
-  --maxlen 80 \
+  --dim_word 512 \
+  --dim 1024 \
+  --n_words_src 30000 \
+  --n_words 30000 \
+  --maxlen 50 \
   --optimizer adam \
-  --anneal_restarts 5 \
+  --anneal_restarts 10 \
   --lrate 0.0002 \
-  --batch_size 5 \
+  --batch_size 80 \
   --dispFreq 10 \
   --finish_after 1000000 \
   --reload \
-  --patience 70 \
-  --saveFreq 10000 \
+  --patience 20 \
+  --saveFreq 5000 \
   --valid_datasets ${dev_prefix}/ch ${dev_prefix}/${tgt_lng}0 \
   --validFreq 100 \
   --valid_batch_size 50 \
-  --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en"
+  --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en" \
+  --start_external_valid 61 \
+  --external_validFreq 500 \
+  --use_dropout \
+  --update_configs_freq 500
+

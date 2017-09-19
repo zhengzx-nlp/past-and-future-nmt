@@ -5,7 +5,7 @@
 #PBS -A course
 #PBS -q ShortQ
 
-export THEANO_FLAGS=device=gpu2,floatX=float32
+export THEANO_FLAGS=device=gpu3,floatX=float32
 
 mkdir -p align_accuracy
 model=$1

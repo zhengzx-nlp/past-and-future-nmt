@@ -527,8 +527,8 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     #
     # left_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
     # right_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
-    extra_rec_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=8)
-    extra_ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
+    extra_rec_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=6)
+    extra_ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=6)
 
     # initial/previous state
     if init_state is None:
@@ -658,7 +658,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
                                    prefix='left_manipulate_c', m_=m_)
         # hl = hl_
         hr = right_manipulate_layer(tparams, hr_, ctx_,
-                                    rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_rec_dropout[6:8],
+                                    rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_ctx_dropout[4:6],
                                     prefix='right_manipulate_c', m_=m_)
 
 
@@ -1336,7 +1336,7 @@ def params_init_mgru_unit(options, params, prefix='mgru', dim_h=None, dim_ctx=No
     return params
 
 
-def mgru_unit_layer(tparams, h_, ctx_, prefix='mgru', m_=None):
+def mgru_unit_layer(tparams, h_, ctx_, rec_dropout=None, ctx_dropout=None, prefix='mgru', m_=None):
     def _slice(_x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n * dim:(n + 1) * dim]
@@ -1344,14 +1344,15 @@ def mgru_unit_layer(tparams, h_, ctx_, prefix='mgru', m_=None):
 
     dim = h_.shape[-1]
 
-    preact1 = tensor.dot(h_, tparams[pp(prefix, 'U_h')]) + tparams[pp(prefix, 'c')]
-    preact1 += tensor.dot(ctx_, tparams[pp(prefix, 'U_c')])
+    preact1 = tensor.dot(h_*rec_dropout[0], tparams[pp(prefix, 'U_h')]) + tparams[pp(prefix, 'c')]
+    preact1 += tensor.dot(ctx_*ctx_dropout[0], tparams[pp(prefix, 'U_c')])
     preact1 = tensor.nnet.sigmoid(preact1)
 
     r1 = _slice(preact1, 0, dim)
     u1 = _slice(preact1, 1, dim)
 
-    preactx1 = tensor.dot(h_, tparams[pp(prefix, 'W_h')]) - r1 * tensor.dot(ctx_, tparams[pp(prefix, 'W_c')])
+    preactx1 = tensor.dot(h_*rec_dropout[1], tparams[pp(prefix, 'W_h')]) \
+               - r1 * tensor.dot(ctx_*ctx_dropout[1], tparams[pp(prefix, 'W_c')])
     preactx1 = preactx1.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
     h1 = tensor.tanh(preactx1)
 
@@ -1379,35 +1380,41 @@ def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, pre
     preact = h_left_.dot(tparams[pp(prefix, 'W_l')]) - h_right_.dot(tparams[pp(prefix, 'W_r')])
     preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
     logit = tanh(preact)
+    # logit = get_layer_constr('ff')(tparams, logit, options, dropout,
+    #                            prefix=prefix + '_ff_logit',
+    #                            activ='linear')
+
     logit = get_layer_constr('ff')(tparams, logit, options, dropout,
-                               prefix=prefix + '_ff_logit',
-                               activ='linear')
+                                   dropout_probability=options['dropout_hidden'],
+                                   prefix=prefix + '_ff_logit',
+                                   activ='linear', followed_by_softmax=True)
     # h_right, r, u = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
     # ipdb.set_trace()
     return logit
 
 
 def params_init_right_manipulate_layer(options, params, prefix='gru', dim_right=None, dim_h=None):
-    params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
-    params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
-    params[pp(prefix, 'W')] = ortho_weight(dim_right, )
-    params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
-    # params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
-    params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
+    # params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
+    # params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
+    # params[pp(prefix, 'W')] = ortho_weight(dim_right, )
+    # params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
+    params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
+    # params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
 
 
     return params
 
 
 def right_manipulate_layer(tparams, h_right_, h_, rec_dropout=None, ctx_dropout=None, prefix='right_manipulate', m_=None):
-    preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
-    preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
-    h_ = tanh(preact)
+    # preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
+    # preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
+    # h_ = tanh(preact)
 
-    h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
-                                    prefix=prefix + '_gru', m_=m_)
+    # h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+    #                                 prefix=prefix + '_gru', m_=m_)
 
-    # h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
+    h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                     prefix=prefix + '_mgru', m_=m_)
     h_right = m_[:, None] * h_right + (1. - m_)[:, None] * h_right_
     return h_right
 
