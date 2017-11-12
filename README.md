@@ -29,7 +29,7 @@ It is implemeted on the popular codebase [Nematus](https://github.com/EdinburghN
 - Or you can download the pretrained models [here(not uploaded yet)]()
 
 ### Training
-Run ./scripts/train.sh (edit it if needed) for training. See ./scripts/train.sh for details.
+Run `./scripts/train.sh` (edit it if needed) for training. See `./scripts/train.sh` for details.
 
 #### model-specific options 
 | option                 | description (value)|
@@ -41,7 +41,7 @@ Run ./scripts/train.sh (edit it if needed) for training. See ./scripts/train.sh 
 | --use_testing_loss     | (bool, default: False) whether to use subtractive loss during testing phase|
 
 ### Testing
-Run ./scripts/test.sh (edit it if needed) for testing. See ./scripts/test.sh for details.
+Run `./scripts/test.sh` (edit it if needed) for testing. See `./scripts/test.sh` for details.
 
 ## PUBLICATIONS
 Zaixiang Zheng*, Hao Zhou*, Shujian Huang, Lili Mou, Xinyu Dai, Jiajun Chen, and Zhaopeng Tu. **Modeling Past and Future for Neural Machine Translation**. To appear in Transactions of the Association for Computational Linguistics (TACL).
