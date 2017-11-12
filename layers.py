@@ -524,9 +524,6 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
     below_dropout = dropout((n_samples, dim_below),  dropout_probability_below, num=2)
     ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
-    #
-    # left_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
-    # right_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=3)
     extra_rec_dropout = dropout((n_samples, options['dim']), dropout_probability_rec, num=6)
     extra_ctx_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=6)
 
@@ -591,17 +588,20 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         # hr = right_manipulate_layer(tparams, hr_, ctx_, prefix='right_manipulate_c', m_=m_)
         # hl = left_manipulate_layer(tparams, hl_, ctx_, prefix='left_manipulate_c', m_=m_)
         # # h_l_and_r = h1.dot()])
-        h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_], axis=h1.ndim - 1),
-                                    rec_dropout=extra_rec_dropout[0:2], ctx_dropout=extra_ctx_dropout[0:2],
-                                    prefix='m_rnn_gru',
-                                    m_=m_)
-        h1 = h3
 
-        # h_l_and_r = h1.dot()])
-        # h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate([hl_, hr_,], axis=
-        #                             prefix='m_rnn_gru',
-        #                             m_=m_)
-        # h1 = h3
+        # feed past or(and) future content(s) into decoder state
+        more_context = []
+        if options['use_past_layer']:
+            more_context.append(hl_)
+        if options['use_future_layer']:
+            more_context.append(hr_)
+        if not more_context:
+            h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate(more_context, axis=h1.ndim - 1),
+                                        rec_dropout=extra_rec_dropout[0:2], ctx_dropout=extra_ctx_dropout[0:2],
+                                        prefix='m_rnn_gru',
+                                        m_=m_)
+            h1 = h3
+
 
         # attention
         pstate_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att')))
@@ -651,15 +651,14 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
             h2_prev = h2
 
         # TODO past and future layers
-        # current right hidden state
-        # hc = right_manipulate_layer(tparams, hc_, y_, prefix='right_manipulate_y', m_=m_)
+        # update states of past and future layers
         hl = left_manipulate_layer(tparams, hl_, ctx_,
                                    rec_dropout=extra_rec_dropout[2:4], ctx_dropout=extra_ctx_dropout[2:4],
-                                   prefix='left_manipulate_c', m_=m_)
-        # hl = hl_
+                                   prefix='left_manipulate_c', m_=m_) if options['use_past_layer'] else hl_
+
         hr = right_manipulate_layer(tparams, hr_, ctx_,
                                     rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_ctx_dropout[4:6],
-                                    prefix='right_manipulate_c', m_=m_)
+                                    prefix='right_manipulate_c', m_=m_) if options['use_future_layer'] else hr_
 
 
         return h2, ctx_, alpha.T, hl, hr  # pstate_, preact, preactx, r, u
@@ -1220,22 +1219,14 @@ def params_init_att(options, params, prefix='gru', nin=None, dim=None):
 
 
 def att_layer(tparams, state_below, context, pctx_, prefix='gru_cond', context_mask=None):
-    ## 当前隐层状态转成dimctx尺寸
-    ## 为什么升维而不降维？ 我觉得是因为降维会丢失信息
-    ## 而升维不会
 
     pstate_ = tensor.dot(state_below, tparams[pp(prefix, 'W_comb_att')])
-    ## 和投影后的context一起
     # if state_below.ndim == 3:
     pctx__ = pctx_ + pstate_[None, :, :]
     # pctx__ += xc_
-    ## 做一个nonlinearity，学一个match函数
     pctx__ = tensor.tanh(pctx__)
-    ## 计算对齐参数alpha， 一个标量
     alpha = tensor.dot(pctx__, tparams[pp(prefix, 'U_att')]) + tparams[pp(prefix, 'c_tt')]
-    ## 去掉第三维
     alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
-    ## 做softmax
     alpha = tensor.exp(alpha)
     if context_mask:
         alpha = alpha * context_mask
@@ -1243,8 +1234,6 @@ def att_layer(tparams, state_below, context, pctx_, prefix='gru_cond', context_m
                           alpha,
                           alpha / alpha.sum(0, keepdims=True))
     # alpha = alpha / alpha.sum(0, keepdims=True)
-    ## 得到分布式对齐乘以context后的加权context，用这个来自源端的
-    ## context来指导decoder的决策
     ctx_ = (context * alpha[:, :, None]).sum(0)  # current context
     return ctx_, alpha
 
@@ -1358,7 +1347,6 @@ def mgru_unit_layer(tparams, h_, ctx_, rec_dropout=None, ctx_dropout=None, prefi
 
     h1 = u1 * h_ + (1. - u1) * h1
     h1 = m_[:, None] * h1 + (1. - m_)[:, None] * h_
-    # ipdb.set_trace()
     return h1, r1, u1
 
 
@@ -1371,8 +1359,6 @@ def params_init_map_minus_layer(options, params, prefix='mf', dim=None):
     params = get_layer_param('ff')(options, params, prefix=prefix + '_ff_logit',
                                 nin=options['dim_word'],
                                 nout=options['n_words'])
-    # params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru',
-    #                                dim_h=dim_right, dim_ctx=dim_h)
     return params
 
 
@@ -1388,53 +1374,55 @@ def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, pre
                                    dropout_probability=options['dropout_hidden'],
                                    prefix=prefix + '_ff_logit',
                                    activ='linear', followed_by_softmax=True)
-    # h_right, r, u = mgru_unit_layer(tparams, h_right_, h_, prefix=prefix + '_mgru', m_=m_)
-    # ipdb.set_trace()
     return logit
 
 
 def params_init_right_manipulate_layer(options, params, prefix='gru', dim_right=None, dim_h=None):
-    # params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
-    # params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
-    # params[pp(prefix, 'W')] = ortho_weight(dim_right, )
-    # params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
-    params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
-    # params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
-
+    if options['future_layer_type'] == 'gru':
+        params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
+    elif options['future_layer_type'] == 'gru_outside':
+        params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
+        params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
+        params[pp(prefix, 'W')] = ortho_weight(dim_right, )
+        params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
+        params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_right, dim_ctx=dim_right)
+    elif options['future_layer_type'] == 'gru_inside':
+        params = params_init_mgru_unit(options, params, prefix=prefix + '_mgru', dim_h=dim_right, dim_ctx=dim_h)
+    else:
+        print 'Future_layer_type only supports: gru, gru_outside, gru_inside'
+        exit(1)
 
     return params
 
 
-def right_manipulate_layer(tparams, h_right_, h_, rec_dropout=None, ctx_dropout=None, prefix='right_manipulate', m_=None):
-    # preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
-    # preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
-    # h_ = tanh(preact)
+def right_manipulate_layer(tparams, h_right_, h_, options, rec_dropout=None, ctx_dropout=None, prefix='right_manipulate', m_=None):
+    if options['future_layer_type'] == 'gru':
+        h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                        prefix=prefix + '_gru', m_=m_)
+    elif options['future_layer_type'] == 'gru_outside':
+        preact = h_right_.dot(tparams[pp(prefix, 'W_c')]) - h_.dot(tparams[pp(prefix, 'W_h')])
+        preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
+        h_ = tanh(preact)
+        h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                        prefix=prefix + '_gru', m_=m_)
+    elif options['future_layer_type'] == 'gru_inside':
+        h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
+                                         prefix=prefix + '_mgru', m_=m_)
+    else:
+        print 'Future_layer_type only supports: gru, gru_outside, gru_inside'
+        exit(1)
 
-    # h_right, r, u, = gru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
-    #                                 prefix=prefix + '_gru', m_=m_)
-
-    h_right, r, u, = mgru_unit_layer(tparams, h_right_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
-                                     prefix=prefix + '_mgru', m_=m_)
     h_right = m_[:, None] * h_right + (1. - m_)[:, None] * h_right_
     return h_right
 
 
 def params_init_left_manipulate_layer(options, params, prefix='gru', dim_left=None, dim_h=None):
-    # params[pp(prefix, 'W_c')] = norm_weight(dim_right, dim_right)
-    # params[pp(prefix, 'W_h')] = norm_weight(dim_h, dim_right)
-    # params[pp(prefix, 'W')] = ortho_weight(dim_right, )
-    # params[pp(prefix, 'b')] = numpy.zeros((dim_right,)).astype('float32')
     params = params_init_gru_unit(options, params, prefix=prefix + '_gru', dim_h=dim_left, dim_ctx=dim_h)
 
     return params
 
 
 def left_manipulate_layer(tparams, h_left_, h_, rec_dropout=None, ctx_dropout=None, prefix='left_manipulate', m_=None):
-    # h_right_ = h_right_.dot(tparams[pp(prefix, 'W_c')])
-    # h_ = h_.dot(tparams[pp(prefix, 'W_h')])
-    # preact = h_right_ - h_
-    # preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
-    # h_right = tanh(preact)
     h_left, r, u, = gru_unit_layer(tparams, h_left_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
                                    prefix=prefix + '_gru', m_=m_)
     h_left = m_[:, None] * h_left + (1. - m_)[:, None] * h_left_

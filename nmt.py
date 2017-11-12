@@ -181,13 +181,29 @@ def init_params(options):
                                    nin=ctxdim, nout=options['dim_word'],
                                    ortho=False)
 
-    # logit layer for past and future
-    params = get_layer_param('ff')(options, params, prefix='ff_logit_left',
-                                   nin=options['dim'], nout=options['dim_word'],
-                                   ortho=False)
-    params = get_layer_param('ff')(options, params, prefix='ff_logit_right',
-                                   nin=options['dim'], nout=options['dim_word'],
-                                   ortho=False)
+    # params for past and future layers
+    if options['use_past_layer']:
+        params = params_init_left_manipulate_layer(options, params, prefix='left_manipulate_c',
+                                                   dim_left=options['dim'], dim_h=ctxdim)
+        params = get_layer_param('ff')(options, params, prefix='ff_logit_left',
+                                       nin=options['dim'], nout=options['dim_word'],
+                                       ortho=False)
+        if options['use_subtractive_loss']:
+            params = params_init_map_minus_layer(options, params, prefix='mm_left', dim=options['dim'])
+
+    if options['use_future_layer']:
+        params = params_init_right_manipulate_layer(options, params, prefix='right_manipulate_c',
+                                                    dim_right=options['dim'], dim_h=ctxdim)
+        params = get_layer_param('ff')(options, params, prefix='ff_logit_right',
+                                       nin=options['dim'], nout=options['dim_word'],
+                                       ortho=False)
+        if options['use_subtractive_loss']:
+            params = params_init_map_minus_layer(options, params, prefix='mm_right', dim=options['dim'])
+
+    if options['use_past_layer'] or options['use_future_layer']:
+        k = options['use_past_layer'] + options['use_future_layer']
+        params = params_init_gru_unit(options, params, prefix='m_rnn_gru',
+                                      dim_h=options['dim'], dim_ctx=(options['dim']*k))
 
     params = get_layer_param('ff')(options, params, prefix='ff_logit',
                                    nin=options['dim_word'],
@@ -195,9 +211,6 @@ def init_params(options):
                                    weight_matrix=not options['tie_decoder_embeddings'],
                                    followed_by_softmax=True)
 
-    # softmax constraints
-    params = params_init_map_minus_layer(options, params, prefix='mm_left', dim=options['dim'])
-    params = params_init_map_minus_layer(options, params, prefix='mm_right', dim=options['dim'])
 
     return params
 
@@ -430,7 +443,7 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
             if options['decoder'].startswith('lstm'):
                 out_state = get_slice(out_state, 0, options['dim'])
 
-            # residual connection
+            # residual connectionf
             next_state += out_state
 
     # don't pass LSTM cell state to next layer
@@ -455,55 +468,63 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
                                        dropout_probability=options['dropout_hidden'],
                                        prefix='ff_logit_ctx', activ='linear')
 
-    logit_left = get_layer_constr('ff')(tparams, next_state_left, options, dropout,
-                                        dropout_probability=options['dropout_hidden'],
-                                        prefix='ff_logit_left',
-                                        activ='linear')
-    logit_right = get_layer_constr('ff')(tparams, next_state_right, options, dropout,
-                                         dropout_probability=options['dropout_hidden'],
-                                         prefix='ff_logit_right',
-                                         activ='linear')
+    logit = logit_lstm + logit_prev + logit_ctx
+    if options['use_past_layer']:
+        logit_left = get_layer_constr('ff')(tparams, next_state_left, options, dropout,
+                                            dropout_probability=options['dropout_hidden'],
+                                            prefix='ff_logit_left',
+                                            activ='linear')
+        logit += logit_left
 
-    logit = tensor.tanh(logit_lstm + logit_prev + logit_ctx + logit_left + logit_right)
+    if options['use_future_layer']:
+        logit_right = get_layer_constr('ff')(tparams, next_state_right, options, dropout,
+                                             dropout_probability=options['dropout_hidden'],
+                                             prefix='ff_logit_right',
+                                             activ='linear')
+        logit += logit_right
+
+    logit = tensor.tanh(logit)
 
     # last layer
     logit_W = tparams['Wemb' + decoder_embedding_suffix].T if options['tie_decoder_embeddings'] else None
     logit = get_layer_constr('ff')(tparams, logit, options, dropout,
                                    dropout_probability=options['dropout_hidden'],
                                    prefix='ff_logit', activ='linear', W=logit_W, followed_by_softmax=True)
-    ret_states = {
-        'next_state': ret_state,
-        # 'next_state_left': next_state_left,
-        # 'next_state_right': next_state_right,
-        # 'next_ctx': ctxs,
-    }
 
-    if not one_step:
-        proj_left_shifted = tensor.zeros_like(next_state_left)
-        proj_left_shifted = tensor.set_subtensor(proj_left_shifted[1:], next_state_left[:-1])
-        # restore initial state to the first dim of proj_right_shifted
-        logit_l = map_minus_manipulate_layer(tparams, next_state_left, proj_left_shifted, options, dropout,
-                                             prefix='mm_left')
-        #
-        proj_right_shifted = tensor.zeros_like(next_state_right)
-        proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state_right[:-1])
-        proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
-        # restore initial state to the first dim of proj_right_shifted
-        logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state_right, options, dropout,
-                                             prefix='mm_right')
-        #
-        # logit = [logit, logit_l, logit_r]
+    # pack logit for nmt, past and future layer into dict() to return
+    logits = {'nmt': logit}
 
-        logit = [logit, logit_l, logit_r]
+    # apply subtractive constraints
+    if options['use_subtractive_loss']:
+        if options['use_past_layer']:
+            if not sampling:    # training
+                proj_left_shifted = tensor.zeros_like(next_state_left)
+                proj_left_shifted = tensor.set_subtensor(proj_left_shifted[1:], next_state_left[:-1])
+                logit_l = map_minus_manipulate_layer(tparams, next_state_left, proj_left_shifted, options, dropout,
+                                                     prefix='mm_left')
+                logits['past'] = logit_l
+            elif options['use_testing_loss']:   # testing
+                logit_l = map_minus_manipulate_layer(tparams, next_state_left, init_state_left, options, dropout,
+                                                     prefix='mm_left')
+                logits['past'] = logit_l
+
+        if options['use_future_layer']:
+            if not sampling:    # training
+                proj_right_shifted = tensor.zeros_like(next_state_right)
+                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state_right[:-1])
+                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
+                # restore initial state to the first dim of proj_right_shifted
+                logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state_right, options, dropout,
+                                                     prefix='mm_right')
+                logits['future'] = logit_r
+            elif options['use_testing_loss']:   # testing
+                logit_r = map_minus_manipulate_layer(tparams, init_state_right, next_state_right, options, dropout,
+                                                     prefix='mm_left')
+                logits['future'] = logit_r
+
 
     # pack next_states into dict() to return
     # note that next_states is a list of multi-layer decoder states
-    # ret_states = {
-    #     'next_state': ret_state,
-    #     'next_state_left': next_state_left,
-    #     'next_state_right': next_state_right,
-    #     'next_ctx': ctxs,
-    # }
     if one_step:
         ret_states = {
             'next_state': ret_state,
@@ -511,7 +532,10 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
             'next_state_right': next_state_right,
             'next_ctx': ctxs,
         }
-    return logit, opt_ret, ret_states
+    else:
+        ret_states = {'next_state': ret_state}
+
+    return logits, opt_ret, ret_states
 
 
 def get_xent_cost(y, y_mask, logit, options):
@@ -564,38 +588,27 @@ def build_model(tparams, options):
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
 
-    logit, opt_ret, _ = build_decoder(tparams, options, y, ctx,
+    logits, opt_ret, _ = build_decoder(tparams, options, y, ctx,
                                       # added by zhengzx
-                                      init_state=[None],
-                                      init_state_left=None,
-                                      init_state_right=init_state[0],
+                                      init_state=[None],                # zero vector to initialize decoder layer
+                                      init_state_left=None,             # zero vector to initialize past layer
+                                      init_state_right=init_state[0],   # source summarization to initialize future layer
                                       init_ctx=None,
                                       dropout=dropout, x_mask=x_mask, y_mask=y_mask, sampling=False)
 
-    # logit_shp = logit.shape
-    # probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
-    #                                            logit_shp[2]]))
-    #
-    # # cost
-    # y_flat = y.flatten()
-    # y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
-    # cost = -tensor.log(probs.flatten()[y_flat_idx])
-    # cost = cost.reshape([y.shape[0], y.shape[1]])
-    # cost = (cost * y_mask).sum(0)
-
     # cost
-
-
-    cost = get_xent_cost(y, y_mask, logit[0], options)
-    cost_l = get_xent_cost(y, y_mask, logit[1], options)
-    cost_r = get_xent_cost(y, y_mask, logit[2], options)
-
-    cost = [cost, cost_l, cost_r]
-    # cost = [cost, cost_r]
+    cost = get_xent_cost(y, y_mask, logits['nmt'], options)
+    costs = [cost]
+    if options['use_past_layer']:
+        cost_past = get_xent_cost(y, y_mask, logits['past'], options)
+        costs.append(cost_past)
+    if options['use_future_layer']:
+        cost_future = get_xent_cost(y, y_mask, logits['future'], options)
+        costs.append(cost_future)
 
     # print "Print out in build_model()"
     # print opt_ret
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, costs
 
 
 # build a sampler
@@ -636,7 +649,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if theano.config.compute_test_value != 'off':
         init_state.tag.test_value = numpy.random.rand(*init_state_old.tag.test_value.shape).astype(floatX)
 
-    logit, opt_ret, ret_states = build_decoder(tparams, options, y, ctx,
+    logits, opt_ret, ret_states = build_decoder(tparams, options, y, ctx,
                                                init_state=init_state,
                                                init_state_left=init_state_left,
                                                init_state_right=init_state_right,
@@ -644,10 +657,26 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
                                                dropout=dropout, x_mask=None, y_mask=None, sampling=True)
 
     # compute the softmax probability
-    next_probs = tensor.nnet.softmax(logit)
+    next_probs = tensor.nnet.softmax(logits['nmt'])
 
     # sample from softmax distribution to get the sample
     next_sample = trng.multinomial(pvals=next_probs).argmax(1)
+    # options['testing_loss']=True
+    if options['testing_loss']:
+        next_probs = [next_probs]
+        if options['use_past_layer']:
+            # logit_l = map_minus_manipulate_layer(tparams, ret_states['next_state_left'], init_state_left, options, dropout,
+            #                                      prefix='mm_left')
+            next_probs_left = tensor.nnet.softmax(logits['past'])
+            next_probs.append(next_probs_left)
+
+        if options['use_future_layer']:
+            # logit_r = map_minus_manipulate_layer(tparams, init_state_right, ret_states['next_state_right'], options, dropout,
+            #                                  prefix='mm_left')
+            next_probs_right = tensor.nnet.softmax(logits['future'])
+            next_probs.append(next_probs_right)
+
+        next_probs = tensor.mean(next_probs)
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
@@ -1199,6 +1228,11 @@ def train(dim_word=512,  # word vector dimensionality
           layer_normalisation=False,  # layer normalisation https://arxiv.org/abs/1607.06450
           weight_normalisation=False,  # normalize weights
           update_configs_freq=-1,
+          # architecture-specific options
+          use_past_layer=False,
+          use_future_layer=False,
+          use_subtractive_loss=False,
+          use_testing_loss=False
           ):
     # Model options
     model_options = OrderedDict(sorted(locals().copy().items()))
@@ -1355,8 +1389,12 @@ def train(dim_word=512,  # word vector dimensionality
         logging.info('Initializing model parameters from prior')
         params = load_params(prior_model, params,
                              exclude=[kk for kk in params.keys() if kk.startswith('decoder')])
-        params['mm_left_ff_logit_W'] = copy.copy(params['ff_logit_W'])
-        params['mm_left_ff_logit_b'] = copy.copy(params['ff_logit_b'])
+        if use_past_layer:
+            params['mm_left_ff_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
+            params['mm_left_ff_logit_b'] = copy.copy(params['ff_logit_b'])
+        if use_future_layer:
+            params['mm_right_ff_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
+            params['mm_right_ff_logit_b'] = copy.copy(params['ff_logit_b'])
 
     # load prior model if specified
     if False and prior_model:
@@ -1368,7 +1406,7 @@ def train(dim_word=512,  # word vector dimensionality
     trng, use_noise, \
     x, x_mask, y, y_mask, \
     opt_ret, \
-    cost = \
+    costs = \
         build_model(tparams, model_options)
 
     inps = [x, x_mask, y, y_mask]
@@ -1382,10 +1420,10 @@ def train(dim_word=512,  # word vector dimensionality
 
     # before any regularizer
     logging.info('Building f_log_probs...')
-    f_log_probs = theano.function(inps, cost, profile=profile)
+    f_log_probs = theano.function(inps, costs, profile=profile)
     logging.info('Done')
 
-    cost = cost[0] + cost[1] + cost[2]
+    cost = numpy.mean(costs, 0)
     # cost = cost[0] + cost[1]
     if model_options['objective'] == 'CE':
         cost = cost.mean()
@@ -1938,6 +1976,16 @@ if __name__ == '__main__':
     network.add_argument('--decoder_deep', type=str, default='gru',
                          choices=['gru', 'gru_cond', 'lstm'],
                          help='decoder recurrent layer after first one (default: %(default)s)')
+    # model-specific options for past and future layers
+    # added by zhengzx, 2017-11-12
+    network.add_argument('--use_past_layer', action="store_true",
+                         help="use past layer (default: %(default)s)")
+    network.add_argument('--use_future_layer', action="store_true",
+                         help="use future layer (default: %(default)s)")
+    network.add_argument('--use_subtractive_loss', action="store_true",
+                         help="use subtractive loss on past or(and) future layer during training phase (default: %(default)s)")
+    network.add_argument('--use_testing_loss', action="store_true",
+                         help="use subtractive loss on past or(and) future layer during testing phase (default: %(default)s)")
 
     training = parser.add_argument_group('training parameters')
     training.add_argument('--maxlen', type=int, default=100, metavar='INT',
