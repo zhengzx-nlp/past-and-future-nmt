@@ -32,16 +32,16 @@ It is implemeted on the popular codebase [Nematus](https://github.com/EdinburghN
 Run ./scripts/train.sh (edit it if needed) for training. See ./scripts/train.sh for details.
 
 #### model-specific options 
-| option          | description (value)|
-|---              |--- |
-| --use_past_layer | (bool, default: False) whether to apply past layer|
-| --use_future_layer | (bool, default: False) whether to apply future layer|
-| --future_layer_type | (str, default: "gru_inside") type of RNN cell for future layer, only support ["gru", "gru_outside", "gru_inside"]|
+| option                 | description (value)|
+| ----------------------- | --- |
+| --use_past_layer       | (bool, default: False) whether to apply past layer|
+| --use_future_layer     | (bool, default: False) whether to apply future layer|
+| --future_layer_type    | (str, default: "gru_inside") type of RNN cell for future layer, <br> only support \["gru", "gru_outside", "gru_inside"\]|
 | --use_subtractive_loss | (bool, default: False) whether to use subtractive loss on past or(and) future layer|
-| --use_testing_loss | (bool, default: False) whether to use subtractive loss during testing phase|
+| --use_testing_loss     | (bool, default: False) whether to use subtractive loss during testing phase|
 
 ### Testing
 Run ./scripts/test.sh (edit it if needed) for testing. See ./scripts/test.sh for details.
 
 ## PUBLICATIONS
-Zaixiang Zheng*, Hao Zhou*, Shujian Huang, Lili Mou, Xinyu Dai, Jiajun Chen, and Zhaopeng Tu. Modeling Past and Future for Neural Machine Translation. To appear in Transactions of the Association for Computational Linguistics (TACL).
+Zaixiang Zheng*, Hao Zhou*, Shujian Huang, Lili Mou, Xinyu Dai, Jiajun Chen, and Zhaopeng Tu. **Modeling Past and Future for Neural Machine Translation**. To appear in Transactions of the Association for Computational Linguistics (TACL).
