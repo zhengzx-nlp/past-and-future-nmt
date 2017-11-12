@@ -8,17 +8,10 @@ mosesdecoder=~/nematus/data/mosesdecoder
 
 # theano device, in case you do not want to compute on gpu, change it to cpu
 device=$2
-
-#model prefix
-#prefix=model/model.npz
-# prefix=$3
-# device=gpu2
-
 dev=$3
 ref=$4
 model_saveto=$5
 saveto=$6
-# cp model-BPE64k/model.npz.json $model_saveto.json
 mkdir -p tmp_trans
 
 # decode
@@ -29,13 +22,14 @@ THEANO_FLAGS=mode=FAST_RUN,floatX=float32,device=$device,on_unused_input=warn py
      -k 12 -n -p 2
 
 
-bash ./postprocess-dev.sh < tmp_trans/$saveto> tmp_trans/$saveto.post
-
+bash ./postprocess-dev.sh < tmp_trans/$saveto > tmp_trans/$saveto
+# for zh-en convention, use case-insensitive bleu
+cp tmp_trans/$saveto tmp_trans/$saveto
 
 ## get BLEU
 BEST=`cat tmp_trans/best_bleu || echo 0`
-$mosesdecoder/scripts/generic/multi-bleu.perl -lc $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
-BLEU=`$mosesdecoder/scripts/generic/multi-bleu.perl -lc $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
+utils/multi-bleu.perl $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
+BLEU=`utils/multi-bleu.perl $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
 BETTER=`echo "$BLEU > $BEST" | bc`
 
 echo "$saveto BLEU = $BLEU"

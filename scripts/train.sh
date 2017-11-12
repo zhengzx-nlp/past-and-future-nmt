@@ -6,17 +6,17 @@
 # For a setup that preprocesses and trains a larger data set,
 # check https://github.com/rsennrich/wmt16-scripts/tree/master/sample
 
-model_dir=$1
-mkdir -p ${model_dir}
-
-device=$2
-export THEANO_FLAGS=device=$device,floatX=float32,lib.cnmem=$3
-
+model_dir=models
+device=gpu0
 src_lng=cn
 tgt_lng=en
 train_prefix=/home/zhengzx/nematus/data/zh-en
 dev_prefix=/home/zhengzx/nematus/data/zh-en/MT03
-python -u ./nmt.py \
+
+mkdir -p ${model_dir}
+export THEANO_FLAGS=device=$device,floatX=float32
+
+python -u ./nematus/nmt.py \
   --model ${model_dir}/model.npz \
   --prior_model ${train_prefix}/model-baseline-maxlen50.npz \
   --datasets ${train_prefix}/${src_lng}.txt.shuf ${train_prefix}/${tgt_lng}.txt.shuf \
@@ -38,6 +38,11 @@ python -u ./nmt.py \
   --valid_datasets ${dev_prefix}/ch ${dev_prefix}/${tgt_lng}0 \
   --validFreq 100 \
   --valid_batch_size 50 \
-  --external_validation_script "bash validate.sh . ${device} ${dev_prefix}/ch ${dev_prefix}/en" \
+  --external_validation_script "bash validate.sh ./nematus ${device} ${dev_prefix}/ch ${dev_prefix}/en" \
   --start_external_valid 61.5 \
-  --external_validFreq 500
+  --external_validFreq 1000 \
+  --use_past_layer \
+  --use_future_layer \
+  --future_layer_type "gru_inside" \
+  --use_subtractive_loss \
+  --use_testing_loss

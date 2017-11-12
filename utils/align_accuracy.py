@@ -2,19 +2,17 @@
 Translates a source file using a translation model.
 '''
 import argparse
-
-import os
-import ipdb
 import logging
-
-import numpy
-import cPickle as pkl
+import os
 import sys
+
+import ipdb
+import numpy
 import theano
 
 sys.path.insert(0, '..')
-from nmt import (prepare_data, load_params, build_model, load_dict, load_config, init_theano_params, profile
-                 )
+from nematus.nmt import (load_params, build_model, load_dict, load_config, init_theano_params, profile
+                         )
 
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 

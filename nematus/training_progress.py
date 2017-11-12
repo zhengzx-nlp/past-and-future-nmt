@@ -2,10 +2,10 @@
 Training progress
 '''
 
-import sys
 import json
 
 import util
+
 
 class TrainingProgress(object):
     '''

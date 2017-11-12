@@ -1,17 +1,20 @@
-import numpy
-
 import gzip
+import math
+
+import numpy
 
 import shuffle
 from util import load_dict
+
 
 def fopen(filename, mode='r'):
     if filename.endswith('.gz'):
         return gzip.open(filename, mode)
     return open(filename, mode)
 
-class TextIterator:
-    """Simple Bitext iterator."""
+
+class DomainInterpolatorTextIterator:
+    """Bitext iterator with domain interpolation."""
     def __init__(self, source, target,
                  source_dicts, target_dict,
                  batch_size=128,
@@ -21,15 +24,22 @@ class TextIterator:
                  skip_empty=False,
                  shuffle_each_epoch=False,
                  sort_by_length=True,
+                 indomain_source='', indomain_target='',
+                 interpolation_rate=0.1,
                  use_factor=False,
                  maxibatch_size=20):
         if shuffle_each_epoch:
             self.source_orig = source
             self.target_orig = target
             self.source, self.target = shuffle.main([self.source_orig, self.target_orig], temporary=True)
+            self.indomain_source_orig = indomain_source
+            self.indomain_target_orig = indomain_target
+            self.indomain_source, self.indomain_target = shuffle.main([self.indomain_source_orig, self.indomain_target_orig], temporary=True)
         else:
             self.source = fopen(source, 'r')
             self.target = fopen(target, 'r')
+            self.indomain_source = fopen(indomain_source, 'r')
+            self.indomain_target = fopen(indomain_target, 'r')
         self.source_dicts = []
         for source_dict in source_dicts:
             self.source_dicts.append(load_dict(source_dict))
@@ -60,16 +70,17 @@ class TextIterator:
         self.source_buffer = []
         self.target_buffer = []
         self.k = batch_size * maxibatch_size
-        
 
         self.end_of_data = False
+
+        self.interpolation_rate = interpolation_rate
+        self.cur_interpolation_rate = self.interpolation_rate
+        self.indomain_k = int(math.ceil(self.cur_interpolation_rate * self.k))
+        self.outdomain_k = self.k - self.indomain_k
 
     def __iter__(self):
         return self
 
-    def __len__(self):
-        return sum([1 for _ in self])
-    
     def reset(self):
         if self.shuffle:
             self.source, self.target = shuffle.main([self.source_orig, self.target_orig], temporary=True)
@@ -77,11 +88,27 @@ class TextIterator:
             self.source.seek(0)
             self.target.seek(0)
 
+    def indomain_reset(self):
+        if self.shuffle:
+            self.indomain_source, self.indomain_target = shuffle.main([self.indomain_source_orig, self.indomain_target_orig], temporary=True)
+        else:
+            self.indomain_source.seek(0)
+            self.indomain_target.seek(0)
+
+    def adjust_domain_interpolation_rate(self, interpolation_rate):
+        # discard sentences in buffers
+        self.source_buffer = []
+        self.target_buffer = []
+        # adjust rate
+        self.cur_interpolation_rate = interpolation_rate
+        self.indomain_k = int(math.ceil(self.cur_interpolation_rate * self.k))
+        self.outdomain_k = self.k - self.indomain_k
+        
     def next(self):
         if self.end_of_data:
             self.end_of_data = False
             self.reset()
-            raise StopIteration
+            #raise StopIteration
 
         source = []
         target = []
@@ -90,24 +117,27 @@ class TextIterator:
         assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
 
         if len(self.source_buffer) == 0:
-            for ss in self.source:
-                ss = ss.split()
-                tt = self.target.readline().split()
-                
-                if self.skip_empty and (len(ss) == 0 or len(tt) == 0):
-                    continue
-                if len(ss) > self.maxlen or len(tt) > self.maxlen:
-                    continue
-
-                self.source_buffer.append(ss)
-                self.target_buffer.append(tt)
-                if len(self.source_buffer) == self.k:
+            for k_ in xrange(self.outdomain_k):
+                ss = self.source.readline()
+                if ss == "":
                     break
-
-            if len(self.source_buffer) == 0 or len(self.target_buffer) == 0:
-                self.end_of_data = False
-                self.reset()
-                raise StopIteration
+                tt = self.target.readline()
+                if tt == "":
+                    break
+                self.source_buffer.append(ss.strip().split())
+                self.target_buffer.append(tt.strip().split())
+            for k_ in xrange(self.indomain_k):
+                indomain_error = False
+                try:
+                    ss = self.indomain_source.readline()
+                    tt = self.indomain_target.readline()
+                except IOError:
+                    indomain_error = True
+                if (ss == "") or (tt == "") or indomain_error:
+                    self.indomain_reset()
+                    raise StopIteration
+                self.source_buffer.append(ss.strip().split())
+                self.target_buffer.append(tt.strip().split())
 
             # sort by target buffer
             if self.sort_by_length:
@@ -124,8 +154,13 @@ class TextIterator:
                 self.source_buffer.reverse()
                 self.target_buffer.reverse()
 
+        if len(self.source_buffer) == 0 or len(self.target_buffer) == 0:
+            self.end_of_data = False
+            self.reset()
+            #raise StopIteration
 
         try:
+
             # actual work here
             while True:
 
@@ -150,6 +185,11 @@ class TextIterator:
                 if self.n_words_target > 0:
                     tt = [w if w < self.n_words_target else 1 for w in tt]
 
+                if len(ss) > self.maxlen and len(tt) > self.maxlen:
+                    continue
+                if self.skip_empty and (not ss or not tt):
+                    continue
+
                 source.append(ss)
                 target.append(tt)
 
@@ -158,5 +198,9 @@ class TextIterator:
                     break
         except IOError:
             self.end_of_data = True
+
+        # all sentence pairs in maxibatch filtered out because of length
+        if len(source) == 0 or len(target) == 0:
+            source, target = self.next()
 
         return source, target

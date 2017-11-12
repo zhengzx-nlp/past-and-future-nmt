@@ -1231,6 +1231,7 @@ def train(dim_word=512,  # word vector dimensionality
           # architecture-specific options
           use_past_layer=False,
           use_future_layer=False,
+          future_layer_type='gru_inside',
           use_subtractive_loss=False,
           use_testing_loss=False
           ):
@@ -1982,6 +1983,9 @@ if __name__ == '__main__':
                          help="use past layer (default: %(default)s)")
     network.add_argument('--use_future_layer', action="store_true",
                          help="use future layer (default: %(default)s)")
+    network.add_argument('--future_layer_type', type=str, default='gru_inside',
+                         choices=['gru', 'gru_outside', 'gru_inside'],
+                         help='decoder recurrent layer after first one (default: %(default)s)')
     network.add_argument('--use_subtractive_loss', action="store_true",
                          help="use subtractive loss on past or(and) future layer during training phase (default: %(default)s)")
     network.add_argument('--use_testing_loss', action="store_true",
