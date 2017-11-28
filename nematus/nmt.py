@@ -1424,7 +1424,7 @@ def train(dim_word=512,  # word vector dimensionality
     f_log_probs = theano.function(inps, costs, profile=profile)
     logging.info('Done')
 
-    cost = numpy.mean(costs, 0)
+    cost = tensor.mean(costs, 0)
     # cost = cost[0] + cost[1]
     if model_options['objective'] == 'CE':
         cost = cost.mean()

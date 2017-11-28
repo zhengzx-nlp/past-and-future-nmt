@@ -7,13 +7,13 @@
 mosesdecoder=~/nematus/data/mosesdecoder
 
 # theano device, in case you do not want to compute on gpu, change it to cpu
-device=$1
-p=$2
+device=gpu0
+p=1
 
-dev=$3
-ref=$4
-model_saveto=$5
-saveto=$6
+dev=/home/zhengzx/nematus/data/zh-en/MT03/ch
+ref=/home/zhengzx/nematus/data/zh-en/MT03/en
+model_saveto=./model.npz
+saveto=mt03.trans
 
 mkdir -p test_trans
 
@@ -29,6 +29,6 @@ bash ./postprocess-dev.sh < test_trans/$saveto > test_trans/$saveto
 cp test_trans/$saveto test_trans/$saveto
 
 ## get BLEU
-BLEU=`utils/multi-bleu.perl $ref < test_trans/$saveto | cut -f 3 -d ' ' | cut -f 1 -d ','`
+BLEU=`perl ../utils/multi-bleu.perl $ref < test_trans/$saveto | cut -f 3 -d ' ' | cut -f 1 -d ','`
 echo "$saveto BLEU = $BLEU" >> test_trans/test_bleu_scores
-utils/multi-bleu.perl $ref < test_trans/$saveto >> test_trans/test_bleu_scores
+perl ../utils/multi-bleu.perl $ref < test_trans/$saveto >> test_trans/test_bleu_scores

@@ -595,7 +595,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
             more_context.append(hl_)
         if options['use_future_layer']:
             more_context.append(hr_)
-        if not more_context:
+        if more_context:
             h3, r3, u3 = gru_unit_layer(tparams, h1, concatenate(more_context, axis=h1.ndim - 1),
                                         rec_dropout=extra_rec_dropout[0:2], ctx_dropout=extra_ctx_dropout[0:2],
                                         prefix='m_rnn_gru',
@@ -652,11 +652,11 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
         # TODO past and future layers
         # update states of past and future layers
-        hl = left_manipulate_layer(tparams, hl_, ctx_,
+        hl = left_manipulate_layer(tparams, hl_, ctx_, options,
                                    rec_dropout=extra_rec_dropout[2:4], ctx_dropout=extra_ctx_dropout[2:4],
                                    prefix='left_manipulate_c', m_=m_) if options['use_past_layer'] else hl_
 
-        hr = right_manipulate_layer(tparams, hr_, ctx_,
+        hr = right_manipulate_layer(tparams, hr_, ctx_, options,
                                     rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_ctx_dropout[4:6],
                                     prefix='right_manipulate_c', m_=m_) if options['use_future_layer'] else hr_
 
@@ -1422,7 +1422,7 @@ def params_init_left_manipulate_layer(options, params, prefix='gru', dim_left=No
     return params
 
 
-def left_manipulate_layer(tparams, h_left_, h_, rec_dropout=None, ctx_dropout=None, prefix='left_manipulate', m_=None):
+def left_manipulate_layer(tparams, h_left_, h_, options, rec_dropout=None, ctx_dropout=None, prefix='left_manipulate', m_=None):
     h_left, r, u, = gru_unit_layer(tparams, h_left_, h_, rec_dropout=rec_dropout, ctx_dropout=ctx_dropout,
                                    prefix=prefix + '_gru', m_=m_)
     h_left = m_[:, None] * h_left + (1. - m_)[:, None] * h_left_

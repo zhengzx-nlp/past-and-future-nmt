@@ -28,8 +28,8 @@ cp tmp_trans/$saveto tmp_trans/$saveto
 
 ## get BLEU
 BEST=`cat tmp_trans/best_bleu || echo 0`
-utils/multi-bleu.perl $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
-BLEU=`utils/multi-bleu.perl $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
+perl ../utils/multi-bleu.perl $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
+BLEU=`perl ../utils/multi-bleu.perl $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
 BETTER=`echo "$BLEU > $BEST" | bc`
 
 echo "$saveto BLEU = $BLEU"
