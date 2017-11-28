@@ -1,10 +1,16 @@
 # past-and-future-nmt
-Implementation of "Modeling Past and future for neural machine translation"
+Modeling Past and Future for Neural Machine Translation
 
 -----
-This is an inplementation of the TACL paper “Modeling Past and Future for Neural Machine Translation"
+If you use the code, which is implemeted on the popular codebase <a href="https://github.com/EdinburghNLP/nematus">Nematus</a>, please cite our paper:
 
-It is implemeted on the popular codebase [Nematus](https://github.com/EdinburghNLP/nematus)
+<pre><code>@article{Zheng:2018:TACL,
+  author    = {Zheng, Zaixiang and Zhou, Hao and Huang, Shujian and Mou, Lili and Dai Xinyu and Chen, Jiajun and Tu, Zhaopeng},
+  title     = {Modeling Past and Future for Neural Machine Translation},
+  journal   = {Transactions of the Association for Computational Linguistics},
+  year      = {2018},
+}
+</code></pre>
 
 ## Requirements
 1. python2.7
@@ -42,6 +48,3 @@ Run `./scripts/train.sh` (edit it if needed) for training. See `./scripts/train.
 
 ### Testing
 Run `./scripts/test.sh` (edit it if needed) for testing. See `./scripts/test.sh` for details.
-
-## PUBLICATIONS
-Zaixiang Zheng*, Hao Zhou*, Shujian Huang, Lili Mou, Xinyu Dai, Jiajun Chen, and Zhaopeng Tu. **Modeling Past and Future for Neural Machine Translation**. To appear in Transactions of the Association for Computational Linguistics (TACL).
