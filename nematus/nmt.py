@@ -147,13 +147,6 @@ def init_params(options):
                                                  recurrence_transition_depth=options[
                                                      'dec_base_recurrence_transition_depth'])
 
-    params = params_init_right_manipulate_layer(options, params, prefix='right_manipulate_c',
-                                                dim_right=options['dim'], dim_h=ctxdim)
-    params = params_init_left_manipulate_layer(options, params, prefix='left_manipulate_c',
-                                               dim_left=options['dim'], dim_h=ctxdim)
-    params = params_init_gru_unit(options, params, prefix='m_rnn_gru',
-                                  dim_h=options['dim'], dim_ctx=(options['dim']*2))
-
     # deeper layers of the decoder
     if options['dec_depth'] > 1:
         if options['dec_deep_context']:
@@ -181,8 +174,11 @@ def init_params(options):
                                    nin=ctxdim, nout=options['dim_word'],
                                    ortho=False)
 
+    print options['use_past_layer']
+    print options['use_future_layer']
     # params for past and future layers
     if options['use_past_layer']:
+        print 'hello????'
         params = params_init_left_manipulate_layer(options, params, prefix='left_manipulate_c',
                                                    dim_left=options['dim'], dim_h=ctxdim)
         params = get_layer_param('ff')(options, params, prefix='ff_logit_left',
@@ -210,6 +206,8 @@ def init_params(options):
                                    nout=options['n_words'],
                                    weight_matrix=not options['tie_decoder_embeddings'],
                                    followed_by_softmax=True)
+    if True:
+        params = params_init_map_minus_layer(options, params, prefix='mm_dec', dim=options['dim'])
 
 
     return params
@@ -522,6 +520,20 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
                                                      prefix='mm_left')
                 logits['future'] = logit_r
 
+        if True:
+            if not sampling:  # training
+                proj_right_shifted = tensor.zeros_like(next_state)
+                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state[:-1])
+                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
+                # restore initial state to the first dim of proj_right_shifted
+                logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state, options,
+                                                     dropout,
+                                                     prefix='mm_dec')
+                logits['dec'] = logit_r
+            elif options['use_testing_loss']:  # testing
+                logit_r = map_minus_manipulate_layer(tparams, init_state[0], next_state, options, dropout,
+                                                     prefix='mm_dec')
+                logits['dec'] = logit_r
 
     # pack next_states into dict() to return
     # note that next_states is a list of multi-layer decoder states
@@ -590,7 +602,7 @@ def build_model(tparams, options):
 
     logits, opt_ret, _ = build_decoder(tparams, options, y, ctx,
                                       # added by zhengzx
-                                      init_state=[None],                # zero vector to initialize decoder layer
+                                      init_state=init_state,                # zero vector to initialize decoder layer
                                       init_state_left=None,             # zero vector to initialize past layer
                                       init_state_right=init_state[0],   # source summarization to initialize future layer
                                       init_ctx=None,
@@ -605,6 +617,9 @@ def build_model(tparams, options):
     if options['use_future_layer']:
         cost_future = get_xent_cost(y, y_mask, logits['future'], options)
         costs.append(cost_future)
+    if True:
+        cost_dec = get_xent_cost(y, y_mask, logits['dec'], options)
+        costs.append(cost_dec)
 
     # print "Print out in build_model()"
     # print opt_ret
@@ -662,7 +677,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # sample from softmax distribution to get the sample
     next_sample = trng.multinomial(pvals=next_probs).argmax(1)
     # options['testing_loss']=True
-    if options['testing_loss']:
+    if options['use_testing_loss']:
         next_probs = [next_probs]
         if options['use_past_layer']:
             # logit_l = map_minus_manipulate_layer(tparams, ret_states['next_state_left'], init_state_left, options, dropout,
@@ -676,7 +691,13 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
             next_probs_right = tensor.nnet.softmax(logits['future'])
             next_probs.append(next_probs_right)
 
-        next_probs = tensor.mean(next_probs)
+        if True:
+            # logit_r = map_minus_manipulate_layer(tparams, init_state_right, ret_states['next_state_right'], options, dropout,
+            #                                  prefix='mm_left')
+            next_probs_right = tensor.nnet.softmax(logits['dec'])
+            next_probs.append(next_probs_right)
+
+        next_probs = tensor.mean(next_probs, axis=0)
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
@@ -896,7 +917,7 @@ def gen_sample(f_init, f_next, x, trng=None, k=1, maxlen=30,
         # to more easily manipulate batch size, go from (layers, batch_size, dim) to (batch_size, layers, dim)
         ret[0] = numpy.transpose(ret[0], (1, 0, 2))
 
-        next_state[i] = numpy.tile(numpy.zeros_like(ret[0]), (live_k, 1, 1))
+        next_state[i] = numpy.tile(ret[0], (live_k, 1, 1))
         next_state_left[i] = numpy.tile(next_state_left[i], (live_k, 1))
         next_state_right[i] = numpy.tile(next_state_right[i], (live_k, 1))
         next_ctx[i] = numpy.tile(next_ctx[i], (live_k, 1))
@@ -1124,18 +1145,18 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
             adjusted_lengths = numpy.array([numpy.count_nonzero(s) ** normalization_alpha for s in y_mask.T])
             pprobs[0] /= adjusted_lengths
             pprobs[1] /= adjusted_lengths
-            pprobs[2] /= adjusted_lengths
+            # pprobs[2] /= adjusted_lengths
 
         for pp in pprobs[0]:
             probs.append(pp)
         for pp in pprobs[1]:
             probs_l.append(pp)
-        for pp in pprobs[2]:
-            probs_r.append(pp)
+        # for pp in pprobs[2]:
+        #     probs_r.append(pp)
 
         logging.debug('%d samples computed' % (n_done))
     print 'cost_l: ', numpy.mean(probs_l)
-    print 'cost_r: ', numpy.mean(probs_r)
+    # print 'cost_r: ', numpy.mean(probs_r)
 
     return numpy.array(probs), alignments_json
 
@@ -1233,7 +1254,7 @@ def train(dim_word=512,  # word vector dimensionality
           use_future_layer=False,
           future_layer_type='gru_inside',
           use_subtractive_loss=False,
-          use_testing_loss=False
+          use_testing_loss=False,
           ):
     # Model options
     model_options = OrderedDict(sorted(locals().copy().items()))

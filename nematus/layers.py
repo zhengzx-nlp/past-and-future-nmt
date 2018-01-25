@@ -652,14 +652,18 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
         # TODO past and future layers
         # update states of past and future layers
-        hl = left_manipulate_layer(tparams, hl_, ctx_, options,
+        if options['use_past_layer']:
+            hl = left_manipulate_layer(tparams, hl_, ctx_, options,
                                    rec_dropout=extra_rec_dropout[2:4], ctx_dropout=extra_ctx_dropout[2:4],
                                    prefix='left_manipulate_c', m_=m_) if options['use_past_layer'] else hl_
-
-        hr = right_manipulate_layer(tparams, hr_, ctx_, options,
+        else:
+            hl = hl_
+        if options['use_future_layer']:
+            hr = right_manipulate_layer(tparams, hr_, ctx_, options,
                                     rec_dropout=extra_rec_dropout[4:6], ctx_dropout=extra_ctx_dropout[4:6],
                                     prefix='right_manipulate_c', m_=m_) if options['use_future_layer'] else hr_
-
+        else:
+            hr = hr_
 
         return h2, ctx_, alpha.T, hl, hr  # pstate_, preact, preactx, r, u
 
@@ -1351,8 +1355,8 @@ def mgru_unit_layer(tparams, h_, ctx_, rec_dropout=None, ctx_dropout=None, prefi
 
 
 def params_init_map_minus_layer(options, params, prefix='mf', dim=None):
-    params[pp(prefix, 'W_l')] = ortho_weight(dim, )
-    params[pp(prefix, 'W_r')] = ortho_weight(dim, )
+    # params[pp(prefix, 'W_l')] = ortho_weight(dim, )
+    # params[pp(prefix, 'W_r')] = ortho_weight(dim, )
     params[pp(prefix, 'W')] = norm_weight(dim, options['dim_word'])
     params[pp(prefix, 'b')] = numpy.zeros((options['dim_word'],)).astype('float32')
 
@@ -1363,7 +1367,8 @@ def params_init_map_minus_layer(options, params, prefix='mf', dim=None):
 
 
 def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, prefix='mf', m_=None):
-    preact = h_left_.dot(tparams[pp(prefix, 'W_l')]) - h_right_.dot(tparams[pp(prefix, 'W_r')])
+    # preact = h_left_.dot(tparams[pp(prefix, 'W_l')]) - h_right_.dot(tparams[pp(prefix, 'W_r')])
+    preact = h_left_ - h_right_
     preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
     logit = tanh(preact)
     # logit = get_layer_constr('ff')(tparams, logit, options, dropout,

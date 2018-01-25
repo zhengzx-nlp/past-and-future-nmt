@@ -22,9 +22,9 @@ THEANO_FLAGS=mode=FAST_RUN,floatX=float32,device=$device,on_unused_input=warn py
      -k 12 -n -p 2
 
 
-bash ./postprocess-dev.sh < tmp_trans/$saveto > tmp_trans/$saveto
+bash ./postprocess-dev.sh < tmp_trans/$saveto > tmp_trans/$saveto.post
 # for zh-en convention, use case-insensitive bleu
-cp tmp_trans/$saveto tmp_trans/$saveto
+cp tmp_trans/$saveto tmp_trans/$saveto.post
 
 ## get BLEU
 BEST=`cat tmp_trans/best_bleu || echo 0`
