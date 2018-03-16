@@ -1355,31 +1355,26 @@ def mgru_unit_layer(tparams, h_, ctx_, rec_dropout=None, ctx_dropout=None, prefi
 
 
 def params_init_map_minus_layer(options, params, prefix='mf', dim=None):
-    # params[pp(prefix, 'W_l')] = ortho_weight(dim, )
-    # params[pp(prefix, 'W_r')] = ortho_weight(dim, )
+    params[pp(prefix, 'W_l')] = ortho_weight(dim, )
+    params[pp(prefix, 'W_r')] = ortho_weight(dim, )
     params[pp(prefix, 'W')] = norm_weight(dim, options['dim_word'])
     params[pp(prefix, 'b')] = numpy.zeros((options['dim_word'],)).astype('float32')
 
-    params = get_layer_param('ff')(options, params, prefix=prefix + '_ff_logit',
-                                nin=options['dim_word'],
-                                nout=options['n_words'])
+    # params = get_layer_param('ff')(options, params, prefix=prefix + '_ff_logit',
+    #                             nin=options['dim_word'],
+    #                             nout=options['n_words'])
     return params
 
 
-def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, prefix='mf', m_=None):
-    # preact = h_left_.dot(tparams[pp(prefix, 'W_l')]) - h_right_.dot(tparams[pp(prefix, 'W_r')])
-    preact = h_left_ - h_right_
+def map_minus_manipulate_layer(tparams, h_left_, h_right_, options, dropout, prefix='mf', m_=None, **ekwargs):
+    preact = h_left_.dot(tparams[pp(prefix, 'W_l')]) - h_right_.dot(tparams[pp(prefix, 'W_r')])
     preact = preact.dot(tparams[pp(prefix, 'W')]) + tparams[pp(prefix, 'b')]
-    logit = tanh(preact)
-    # logit = get_layer_constr('ff')(tparams, logit, options, dropout,
+    delta = tanh(preact)
+    # logit = get_layer_constr('ff')(tparams, delta, options, dropout,
     #                            prefix=prefix + '_ff_logit',
     #                            activ='linear')
 
-    logit = get_layer_constr('ff')(tparams, logit, options, dropout,
-                                   dropout_probability=options['dropout_hidden'],
-                                   prefix=prefix + '_ff_logit',
-                                   activ='linear', followed_by_softmax=True)
-    return logit
+    return delta
 
 
 def params_init_right_manipulate_layer(options, params, prefix='gru', dim_right=None, dim_h=None):
@@ -1432,3 +1427,207 @@ def left_manipulate_layer(tparams, h_left_, h_, options, rec_dropout=None, ctx_d
                                    prefix=prefix + '_gru', m_=m_)
     h_left = m_[:, None] * h_left + (1. - m_)[:, None] * h_left_
     return h_left
+
+
+def init_transition_diff(options, params):
+    params["diff_ctx_W"] = norm_weight(options["dim"]*2, options['dim_word'])
+    # params["diff_delta_W"] = norm_weight(options["dim_word"], options['dim_word'])
+
+    return params
+
+
+def get_transition_diff(tparams, deltas, ctxs, mapping=True):
+    """
+    :param deltas: [timesteps, batch, dim_word]
+    :param ctxs: [timesteps, batch, dim_ctx]
+    :return: diff [batch]
+    """
+
+    def _distance(a, b):
+        return tensor.sum((a - b) ** 2, axis=a.ndim - 1)
+
+    if mapping:
+        ctxs = tensor.dot(ctxs, tparams["diff_ctx_W"])
+    # deltas = tensor.dot(deltas, tparams["diff_delta_W"])
+    diff = _distance(deltas, ctxs)
+
+    return tensor.sum(diff, axis=0)
+
+
+def init_word_predictor(options, params, prefix=""):
+    params[pp(prefix, "V")] = norm_weight(options["dim"] * 2, options['dim_word'])
+    params[pp(prefix, "c")] = numpy.zeros((options['dim_word'],)).astype('float32')
+
+    params = get_layer_param('ff')(options, params, prefix=prefix,
+                                   nin=options['dim_word'],
+                                   nout=options['n_words'],
+                                   weight_matrix=False,
+                                   followed_by_softmax=True)
+    return params
+
+def word_predictor(x, x_mask, ctx, tparams, dropout, options, loss_fn, prefix=""):
+    logit_W = tparams['Wemb'].T
+    logit = tanh(tensor.dot(ctx, tparams[pp(prefix, "V")]) + tparams[pp(prefix, "c")])
+    logit = get_layer_constr('ff')(tparams, logit, options, dropout,
+                                   dropout_probability=options['dropout_hidden'],
+                                   prefix=prefix, activ='linear', W=logit_W, followed_by_softmax=True)
+    return loss_fn(x.reshape([x.shape[1], x.shape[2]]), x_mask, logit, options)
+
+
+
+def params_init_multi_att(options, params, prefix='gru', dim_q=None, dim_k=None):
+    # attention: query -> key
+    Wc_att = norm_weight(dim_q, dim_k)
+    params[pp(prefix, 'W_q')] = Wc_att
+    # attention: hidden bias
+    b_att = numpy.zeros((dim_k,)).astype('float32')
+    params[pp(prefix, 'b')] = b_att
+    # attention: key -> key
+    W_comb_att = norm_weight(dim_k, dim_k)
+    params[pp(prefix, 'W_k')] = W_comb_att
+
+    # attention:
+    U_att = norm_weight(dim_k, 1)
+    params[pp(prefix, 'v')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[pp(prefix, 'c')] = c_att
+
+    return params
+
+
+def multi_att_layer(tparams, query, key, value, prefix='gru_cond', value_mask=None):
+    """
+    :param tparams:
+    :param query: [len_q, batch, dim]
+    :param key:   [len_k, batch, dim]
+    :param value: [len_v, batch, dim]
+    :param prefix:
+    :param value_mask: [len_v, batch]
+    :return:
+        alpha: [len_q, batch, len_k]
+        context: [len_q, batch, dim]
+    """
+    # transpose to [batch, len_q, len_k, dim]
+    len_q = query.shape[0]
+    len_k = key.shape[0]
+    query = tensor.tile(tensor.transpose(query, [1, 0, 'x', 2]), [1, 1, len_k, 1])
+    key = tensor.tile(tensor.transpose(key, [1, 'x', 0, 2]), [1, len_q, 1, 1])
+    value = tensor.tile(tensor.transpose(value, [1, 'x', 0, 2]), [1, len_q, 1, 1])
+
+    preact = tensor.dot(query, tparams[pp(prefix, 'W_q')]) + tensor.dot(key, tparams[pp(prefix, 'W_k')]) + \
+        tparams[pp(prefix, 'b')]
+    combined = tanh(preact)
+    alpha = tensor.dot(combined, tparams[pp(prefix, 'v')]) + tparams[pp(prefix, 'c')]
+    # [batch, len_q, len_k]
+    alpha = alpha.reshape([alpha.shape[0], alpha.shape[1], alpha.shape[2]])
+
+    if value_mask:
+        # [batch, 1, len_k]
+        value_mask = tensor.transpose(value_mask, [1, 'x', 0])
+        alpha *= value_mask
+
+    # [batch, len_q, dim]
+    context = (value * alpha[:, :, :, None]).sum(2)
+    context = tensor.transpose(context, [1, 0, 2])
+    return context, alpha
+
+
+def params_init_wpd(options, params, prefix='wpd'):
+    params = get_layer_param('ff')(options, params, prefix="ff_logit_wpd",
+                                   nin=options['dim_word'],
+                                   nout=options['dim_word'])
+
+    return params
+
+
+def wpd(tparams, logit, options, y_mask, y, dropout):
+    logit_v = get_layer_constr('ff')(tparams, logit, options, dropout,
+                                 prefix='ff_logit_wpd', activ='tanh')
+    logit_v = get_layer_constr('ff')(tparams, logit_v, options, dropout,
+                                 prefix='ff_logit', activ='linear')
+
+    logit_v_shp = logit_v.shape
+    probs_v = tensor.nnet.softmax(logit_v.reshape([logit_v_shp[0] * logit_v_shp[1],
+                                                   logit_v_shp[2]]))
+    # cost
+    vv = y.shape[0]
+    y_v = tensor.arange(y.shape[1]) * options['n_words'] + y
+    y_v, updates = theano.scan(lambda l, y_t: y_v,
+                               sequences=tensor.arange(vv),
+                               non_sequences=y_v)
+
+    y_v_mask = tensor.zeros_like(y_mask)
+
+    def add_cost(y_t, l, prob, y, y_mask, y_z_mask):
+        temp = (y_t + l * options['n_words']).flatten()
+        prob_t = prob.flatten()[temp]
+        prob_t = -tensor.log(prob_t)
+        prob_t = prob_t.reshape([y.shape[0], y.shape[1]])
+
+        y_mask = tensor.set_subtensor(y_mask[l:], y_z_mask[l:])
+
+        prob_t *= y_mask
+        prob_t = prob_t.sum(0)
+        y_mask_tt = y_mask.sum(0) + 1
+        prob_t = prob_t / y_mask_tt
+        return prob_t
+
+    cost_v, updates = theano.scan(fn=add_cost,
+                                  outputs_info=None,
+                                  sequences=[y_v, tensor.arange(vv)],
+                                  non_sequences=[probs_v, y, y_mask, y_v_mask])
+    cost_v = cost_v.mean(0)
+
+    return cost_v
+
+
+def params_init_wpe(options, params, prefix='wpe'):
+    params = get_layer_param(options['decoder'])(options, params,
+                                                 prefix='wpe',
+                                                 nin=options['dim_word'],
+                                                 dim=options['dim'],
+                                                 dimctx=options["dim"]*2,
+                                                 recurrence_transition_depth=options[
+                                                     'dec_base_recurrence_transition_depth'])
+    return params
+
+
+def wpe(tparams, emb, options, y_mask, y, ctx, x_mask, init_state, dropout):
+
+    proj_r = get_layer_constr(options['decoder'])(tparams, emb[0], options, dropout,
+                                                prefix='wpe',
+                                                mask=None, context=ctx,
+                                                context_mask=x_mask,
+                                                one_step=True,
+                                                init_state=init_state)
+    proj_h_r = proj_r[0]
+    ctxs_r = proj_r[1]
+    # opt_ret['dec_alphas_r'] = proj_r[2]
+
+    logit_lstm_r = get_layer_constr('ff')(tparams, proj_h_r, options, dropout,
+                                      prefix='ff_logit_lstm', activ='linear')
+    logit_prev_r = get_layer_constr('ff')(tparams, emb, options, dropout,
+                                      prefix='ff_logit_prev', activ='linear')
+    logit_ctx_r = get_layer_constr('ff')(tparams, ctxs_r, options, dropout,
+                                     prefix='ff_logit_ctx', activ='linear')
+
+    logit_r = tensor.tanh(logit_lstm_r + logit_prev_r + logit_ctx_r)
+
+    logit_r = get_layer_constr('ff')(tparams, logit_r, options, dropout,
+                                 prefix='ff_logit', activ='linear')
+    logit_shp_r = logit_r.shape
+
+    probs_r = tensor.nnet.softmax(logit_r.reshape([logit_shp_r[0] * logit_shp_r[1],
+                                                   logit_shp_r[2]]))
+
+    # cost
+    # change the reverse cost option
+    y_tt = tensor.arange(y.shape[1]) * options['n_words'] + y
+    cost_tt = -tensor.log(probs_r.flatten()[y_tt])
+    cost_tt = cost_tt.reshape([y_tt.shape[0], y_tt.shape[1]])
+    cost_tt = (cost_tt * y_mask).sum(0)
+    y_mast_tt = y_mask.sum(0)
+    cost_tt = cost_tt / y_mast_tt
+
+    return cost_tt
+

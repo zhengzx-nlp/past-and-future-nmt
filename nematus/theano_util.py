@@ -97,12 +97,14 @@ def save(model_params, optimizer_params, training_progress, base_filename, file_
         new_model_params, new_optimizer_params = {}, {}
         for kk, vv in model_params.iteritems():
             new_model_params[kk] = vv.astype(file_float_type)
-        for kk, vv in optimizer_params.iteritems():
-            new_optimizer_params[kk] = vv.astype(file_float_type)
+        if optimizer_params:
+            for kk, vv in optimizer_params.iteritems():
+                new_optimizer_params[kk] = vv.astype(file_float_type)
         model_params, optimizer_params = new_model_params, new_optimizer_params
 
     numpy.savez(base_filename, **model_params)
-    numpy.savez(base_filename + '.gradinfo', **optimizer_params)
+    if optimizer_params:
+        numpy.savez(base_filename + '.gradinfo', **optimizer_params)
     training_progress.save_to_json(base_filename + '.progress.json')
 
 def tanh(x):

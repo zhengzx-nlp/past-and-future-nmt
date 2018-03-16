@@ -12,7 +12,7 @@ p=3
 test_name=MT05
 dev=/home/zhengzx/nematus/data/zh-en/$test_name/ch
 ref=/home/zhengzx/nematus/data/zh-en/$test_name/en
-model_saveto=../models2/model.iter79000.npz
+model_saveto=../models/model.iter79000.npz
 saveto=${test_name}.trans.iter79000
 
 mkdir -p test_trans

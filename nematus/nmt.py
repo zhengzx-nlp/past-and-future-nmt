@@ -174,8 +174,6 @@ def init_params(options):
                                    nin=ctxdim, nout=options['dim_word'],
                                    ortho=False)
 
-    print options['use_past_layer']
-    print options['use_future_layer']
     # params for past and future layers
     if options['use_past_layer']:
         print 'hello????'
@@ -186,6 +184,11 @@ def init_params(options):
                                        ortho=False)
         if options['use_subtractive_loss']:
             params = params_init_map_minus_layer(options, params, prefix='mm_left', dim=options['dim'])
+            params = get_layer_param('ff')(options, params, prefix='ff_past_logit',
+                                           nin=options['dim_word'],
+                                           nout=options['n_words'],
+                                           weight_matrix=not options['tie_decoder_embeddings'],
+                                           followed_by_softmax=True)
 
     if options['use_future_layer']:
         params = params_init_right_manipulate_layer(options, params, prefix='right_manipulate_c',
@@ -195,6 +198,11 @@ def init_params(options):
                                        ortho=False)
         if options['use_subtractive_loss']:
             params = params_init_map_minus_layer(options, params, prefix='mm_right', dim=options['dim'])
+            params = get_layer_param('ff')(options, params, prefix='ff_future_logit',
+                                           nin=options['dim_word'],
+                                           nout=options['n_words'],
+                                           weight_matrix=not options['tie_decoder_embeddings'],
+                                           followed_by_softmax=True)
 
     if options['use_past_layer'] or options['use_future_layer']:
         k = options['use_past_layer'] + options['use_future_layer']
@@ -206,9 +214,40 @@ def init_params(options):
                                    nout=options['n_words'],
                                    weight_matrix=not options['tie_decoder_embeddings'],
                                    followed_by_softmax=True)
-    if True:
-        params = params_init_map_minus_layer(options, params, prefix='mm_dec', dim=options['dim'])
 
+    if options["transition_control"]:
+        params = params_init_map_minus_layer(options, params, prefix='mm_dec', dim=options['dim'])
+        params = get_layer_param('ff')(options, params, prefix='ff_delta_logit',
+                                       nin=options['dim_word'],
+                                       nout=options['n_words'],
+                                       weight_matrix=not options['tie_decoder_embeddings'],
+                                       followed_by_softmax=True)
+        if options['predict_prev']:
+            params = get_layer_param('ff')(options, params, prefix='ff_delta_prev_logit',
+                                           nin=options['dim_word'],
+                                           nout=options['n_words'],
+                                           weight_matrix=not options['tie_decoder_embeddings'],
+                                           followed_by_softmax=True)
+
+        if options["tie_delta_and_ctx"]:
+            params = init_transition_diff(options, params)
+        if options["delta_attention"]:
+            params = params_init_att(options, params, prefix="delta_att",
+                                     nin=ctxdim, dim=options['dim_word'])
+            # params = params_init_multi_att(options, params, prefix="delta_att",
+            #                                dim_q=options["dim_word"], dim_k=ctxdim)
+    if options["source_prediction"]:
+        params = init_word_predictor(options, params, prefix="src_wp")
+
+    if options["context_prediction"]:
+        params = get_layer_param('ff')(options, params, prefix='ff_logit_ctxs',
+                                       nin=ctxdim, nout=options['n_words'],
+                                       ortho=False)
+
+    if options["wpd"]:
+        params = params_init_wpd(options, params, prefix="wpd")
+    if options["wpe"]:
+        params = params_init_wpe(options, params, prefix="wpe")
 
     return params
 
@@ -482,7 +521,7 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
         logit += logit_right
 
     logit = tensor.tanh(logit)
-
+    logit_ = logit
     # last layer
     logit_W = tparams['Wemb' + decoder_embedding_suffix].T if options['tie_decoder_embeddings'] else None
     logit = get_layer_constr('ff')(tparams, logit, options, dropout,
@@ -498,13 +537,18 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
             if not sampling:    # training
                 proj_left_shifted = tensor.zeros_like(next_state_left)
                 proj_left_shifted = tensor.set_subtensor(proj_left_shifted[1:], next_state_left[:-1])
-                logit_l = map_minus_manipulate_layer(tparams, next_state_left, proj_left_shifted, options, dropout,
+                delta_l = map_minus_manipulate_layer(tparams, next_state_left, proj_left_shifted, options, dropout,
                                                      prefix='mm_left')
-                logits['past'] = logit_l
             elif options['use_testing_loss']:   # testing
-                logit_l = map_minus_manipulate_layer(tparams, next_state_left, init_state_left, options, dropout,
+                delta_l = map_minus_manipulate_layer(tparams, next_state_left, init_state_left, options, dropout,
                                                      prefix='mm_left')
-                logits['past'] = logit_l
+
+            logit_l = get_layer_constr('ff')(tparams, delta_l, options, dropout,
+                                                 dropout_probability=options['dropout_hidden'],
+                                                 prefix='ff_past_logit',
+                                                 activ='linear', followed_by_softmax=True,
+                                                 W=logit_W)
+            logits['past'] = logit_l
 
         if options['use_future_layer']:
             if not sampling:    # training
@@ -512,28 +556,85 @@ def build_decoder(tparams, options, y, ctx, init_state=None, init_state_left=Non
                 proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state_right[:-1])
                 proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
                 # restore initial state to the first dim of proj_right_shifted
-                logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state_right, options, dropout,
+                delta_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state_right, options, dropout,
                                                      prefix='mm_right')
-                logits['future'] = logit_r
             elif options['use_testing_loss']:   # testing
-                logit_r = map_minus_manipulate_layer(tparams, init_state_right, next_state_right, options, dropout,
+                delta_r = map_minus_manipulate_layer(tparams, init_state_right, next_state_right, options, dropout,
                                                      prefix='mm_left')
-                logits['future'] = logit_r
 
-        if True:
-            if not sampling:  # training
-                proj_right_shifted = tensor.zeros_like(next_state)
-                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state[:-1])
-                proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
-                # restore initial state to the first dim of proj_right_shifted
-                logit_r = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state, options,
-                                                     dropout,
-                                                     prefix='mm_dec')
-                logits['dec'] = logit_r
-            elif options['use_testing_loss']:  # testing
-                logit_r = map_minus_manipulate_layer(tparams, init_state[0], next_state, options, dropout,
-                                                     prefix='mm_dec')
-                logits['dec'] = logit_r
+            logit_r = get_layer_constr('ff')(tparams, delta_r, options, dropout,
+                                                 dropout_probability=options['dropout_hidden'],
+                                                 prefix='ff_future_logit',
+                                                 activ='linear', followed_by_softmax=True,
+                                                 W=logit_W)
+            logits['future'] = logit_r
+
+    if options["transition_control"]:
+        if not sampling:  # training
+            proj_right_shifted = tensor.zeros_like(next_state)
+            proj_right_shifted = tensor.set_subtensor(proj_right_shifted[1:], next_state[:-1])
+            proj_right_shifted = tensor.set_subtensor(proj_right_shifted[:1], init_state_right)
+            # restore initial state to the first dim of proj_right_shifted
+            delta = map_minus_manipulate_layer(tparams, proj_right_shifted, next_state, options,
+                                                 dropout,
+                                                 prefix='mm_dec')
+
+            logit_delta = get_layer_constr('ff')(tparams, delta, options, dropout,
+                                                 dropout_probability=options['dropout_hidden'],
+                                                 prefix='ff_delta_logit',
+                                                 activ='linear', followed_by_softmax=True,
+                                                 W=logit_W)
+
+            logits['delta'] = logit_delta
+            if options['predict_prev']:
+                delta_left_shifted = tensor.zeros_like(delta)
+                delta_left_shifted = tensor.set_subtensor(delta_left_shifted[:-1], delta[1:])
+                logit_delta_prev = get_layer_constr('ff')(tparams, delta_left_shifted, options, dropout,
+                                                          dropout_probability=options['dropout_hidden'],
+                                                          prefix='ff_delta_prev_logit',
+                                                          activ='linear', followed_by_softmax=True)
+                logits['delta_prev'] = logit_delta_prev
+            if options["tie_delta_and_ctx"]:
+                diff = get_transition_diff(tparams, delta, ctxs)
+                logits["diff"] = diff
+            if options["delta_attention"]:
+                # delta_ctxs, _ = multi_att_layer(tparams, delta, ctx, ctx, "delta_att", x_mask)
+                pctx = tensor.dot(ctx, tparams[pp("delta_att", 'Wc_att')]) + \
+                       tparams[pp("delta_att", 'b_att')]
+
+                def _step(delta_, ctx_, pctx_, mask_):
+                    c, _ = att_layer(tparams, delta_, ctx_, pctx_, "delta_att", mask_)
+                    return c
+
+                delta_ctxs = theano.scan(_step,
+                                         sequences=delta,
+                                         non_sequences=[ctx, pctx, x_mask])[0]
+                diff = get_transition_diff(tparams, delta_ctxs, ctxs, mapping=False)
+                logits["delta_ctx_diff"] = diff
+        elif options['use_testing_loss']:  # testing
+            delta = map_minus_manipulate_layer(tparams, init_state[0], next_state, options, dropout,
+                                               prefix='mm_dec')
+            logit_delta = get_layer_constr('ff')(tparams, delta, options, dropout,
+                                           dropout_probability=options['dropout_hidden'],
+                                           prefix='ff_delta_logit',
+                                           activ='linear', followed_by_softmax=True,
+                                           W=logit_W)
+
+            logits['delta'] = logit_delta
+
+    if options["context_prediction"]:
+        print "use context prediction"
+        logit_ctxs = get_layer_constr('ff')(tparams, ctxs, options, dropout,
+                                           dropout_probability=options['dropout_hidden'],
+                                           prefix='ff_logit_ctxs', activ='linear')
+        logits["ctxs"] = logit_ctxs
+
+    if options["wpe"] and not sampling:
+        cost_wpe = wpe(tparams, emb, options, y_mask, y, ctx, x_mask, init_state[0], dropout)
+        opt_ret['cost_wpe'] = cost_wpe
+    if options["wpd"] and not sampling:
+        cost_wpd = wpd(tparams, logit_, options, y_mask, y, dropout)
+        opt_ret["cost_wpd"] = cost_wpd
 
     # pack next_states into dict() to return
     # note that next_states is a list of multi-layer decoder states
@@ -599,7 +700,8 @@ def build_model(tparams, options):
     init_state = init_state.reshape([1, init_state.shape[0], init_state.shape[1]])
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
-
+    if options['zero_initialization']:
+        init_state *= 0
     logits, opt_ret, _ = build_decoder(tparams, options, y, ctx,
                                       # added by zhengzx
                                       init_state=init_state,                # zero vector to initialize decoder layer
@@ -611,16 +713,34 @@ def build_model(tparams, options):
     # cost
     cost = get_xent_cost(y, y_mask, logits['nmt'], options)
     costs = [cost]
-    if options['use_past_layer']:
-        cost_past = get_xent_cost(y, y_mask, logits['past'], options)
-        costs.append(cost_past)
-    if options['use_future_layer']:
-        cost_future = get_xent_cost(y, y_mask, logits['future'], options)
-        costs.append(cost_future)
-    if True:
-        cost_dec = get_xent_cost(y, y_mask, logits['dec'], options)
+    if options["use_subtractive_loss"]:
+        if options['use_past_layer']:
+            cost_past = get_xent_cost(y, y_mask, logits['past'], options)
+            costs.append(cost_past)
+        if options['use_future_layer']:
+            cost_future = get_xent_cost(y, y_mask, logits['future'], options)
+            costs.append(cost_future)
+    if options["transition_control"]:
+        cost_dec = get_xent_cost(y, y_mask, logits['delta'], options)
         costs.append(cost_dec)
-
+        if options['predict_prev']:
+            cost_prev = get_xent_cost(y, y_mask, logits['delta_prev'], options)
+            costs.append(cost_prev)
+        if options["tie_delta_and_ctx"]:
+            costs.append(logits["diff"])
+        if options["delta_attention"]:
+            costs.append(logits["delta_ctx_diff"])
+    if options["context_prediction"]:
+        cost_c = get_xent_cost(y, y_mask, logits['ctxs'], options)
+        costs.append(cost_c)
+    if options["source_prediction"]:
+        cost_swp = word_predictor(x, x_mask, ctx, tparams, dropout, options,
+                                  loss_fn=get_xent_cost, prefix="src_wp")
+        costs.append(cost_swp)
+    if options["wpe"]:
+        costs.append(opt_ret["cost_wpe"])
+    if options["wpd"]:
+        costs.append(opt_ret["cost_wpd"])
     # print "Print out in build_model()"
     # print opt_ret
     return trng, use_noise, x, x_mask, y, y_mask, opt_ret, costs
@@ -645,6 +765,9 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     init_state = init_state.reshape([1, init_state.shape[0], init_state.shape[1]])
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
+
+    if options['zero_initialization']:
+        init_state *= 0
 
     logging.info('Building f_init...')
     outs = [init_state, ctx]
@@ -679,23 +802,28 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # options['testing_loss']=True
     if options['use_testing_loss']:
         next_probs = [next_probs]
-        if options['use_past_layer']:
-            # logit_l = map_minus_manipulate_layer(tparams, ret_states['next_state_left'], init_state_left, options, dropout,
-            #                                      prefix='mm_left')
-            next_probs_left = tensor.nnet.softmax(logits['past'])
-            next_probs.append(next_probs_left)
+        if options["use_subtractive_loss"]:
+            if options['use_past_layer']:
+                # logit_l = map_minus_manipulate_layer(tparams, ret_states['next_state_left'], init_state_left, options, dropout,
+                #                                      prefix='mm_left')
+                next_probs_left = tensor.nnet.softmax(logits['past'])
+                next_probs.append(next_probs_left)
 
-        if options['use_future_layer']:
+            if options['use_future_layer']:
+                # logit_r = map_minus_manipulate_layer(tparams, init_state_right, ret_states['next_state_right'], options, dropout,
+                #                                  prefix='mm_left')
+                next_probs_right = tensor.nnet.softmax(logits['future'])
+                next_probs.append(next_probs_right)
+
+        if options["transition_control"]:
             # logit_r = map_minus_manipulate_layer(tparams, init_state_right, ret_states['next_state_right'], options, dropout,
             #                                  prefix='mm_left')
-            next_probs_right = tensor.nnet.softmax(logits['future'])
-            next_probs.append(next_probs_right)
+            next_probs_delta = tensor.nnet.softmax(logits['delta'])
+            next_probs.append(next_probs_delta)
 
-        if True:
-            # logit_r = map_minus_manipulate_layer(tparams, init_state_right, ret_states['next_state_right'], options, dropout,
-            #                                  prefix='mm_left')
-            next_probs_right = tensor.nnet.softmax(logits['dec'])
-            next_probs.append(next_probs_right)
+        if options["context_prediction"]:
+            next_probs_c = tensor.nnet.softmax(logits['ctxs'])
+            next_probs.append(next_probs_c)
 
         next_probs = tensor.mean(next_probs, axis=0)
 
@@ -1114,7 +1242,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
     probs_l = []
     probs_r = []
     n_done = 0
-
+    more_probs = []
     alignments_json = []
 
     for x, y in iterator:
@@ -1143,21 +1271,31 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
         # normalize scores according to output length
         if normalization_alpha:
             adjusted_lengths = numpy.array([numpy.count_nonzero(s) ** normalization_alpha for s in y_mask.T])
-            pprobs[0] /= adjusted_lengths
-            pprobs[1] /= adjusted_lengths
+            # pprobs[0] /= adjusted_lengths
+            # pprobs[1] /= adjusted_lengths
             # pprobs[2] /= adjusted_lengths
-
+            for p in pprobs:
+                p /= adjusted_lengths
         for pp in pprobs[0]:
             probs.append(pp)
-        for pp in pprobs[1]:
-            probs_l.append(pp)
+        # for pp in pprobs[1]:
+        #     probs_l.append(pp)
         # for pp in pprobs[2]:
         #     probs_r.append(pp)
 
-        logging.debug('%d samples computed' % (n_done))
-    print 'cost_l: ', numpy.mean(probs_l)
-    # print 'cost_r: ', numpy.mean(probs_r)
+        if len(more_probs) < len(pprobs[1:]) and len(pprobs[1:]):
+           more_probs = [[] for i in range(len(pprobs[1:]))]
+        if len(pprobs[1:]):
+            for p, mp in zip(pprobs[1:], more_probs):
+                for pp in p:
+                    mp.append(pp)
 
+        logging.debug('%d samples computed' % (n_done))
+    # import ipdb; ipdb.set_trace()
+    # print 'cost_l: ', numpy.mean(probs_l)
+    # print 'cost_r: ', numpy.mean(probs_r)
+    for idx, p in enumerate(more_probs):
+        print "cost_{}: {}".format(idx, numpy.mean(p))
     return numpy.array(probs), alignments_json
 
 
@@ -1255,7 +1393,16 @@ def train(dim_word=512,  # word vector dimensionality
           future_layer_type='gru_inside',
           use_subtractive_loss=False,
           use_testing_loss=False,
-          ):
+          tie_delta_and_ctx=False,
+          context_prediction=False,
+          source_prediction=False,
+          delta_attention=False,
+          predict_prev=False,
+          wpe=False,
+          wpd=False,
+          transition_control=False,
+          zero_initialization=False,
+          **kwargs):
     # Model options
     model_options = OrderedDict(sorted(locals().copy().items()))
     print model_options
@@ -1412,11 +1559,11 @@ def train(dim_word=512,  # word vector dimensionality
         params = load_params(prior_model, params,
                              exclude=[kk for kk in params.keys() if kk.startswith('decoder')])
         if use_past_layer:
-            params['mm_left_ff_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
-            params['mm_left_ff_logit_b'] = copy.copy(params['ff_logit_b'])
+            params['ff_past_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
+            params['ff_past_logit_b'] = copy.copy(params['ff_logit_b'])
         if use_future_layer:
-            params['mm_right_ff_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
-            params['mm_right_ff_logit_b'] = copy.copy(params['ff_logit_b'])
+            params['ff_future_logit_W'] = copy.copy(params['ff_logit_W'] if params.haskey('ff_logit_W') else params['Wemb_dec'])
+            params['ff_future_logit_b'] = copy.copy(params['ff_logit_b'])
 
     # load prior model if specified
     if False and prior_model:
@@ -1486,6 +1633,10 @@ def train(dim_word=512,  # word vector dimensionality
     if prior_model:
         updated_params = OrderedDict(
             [(key, value) for (key, value) in updated_params.iteritems() if not key.startswith('prior_')])
+
+    if zero_initialization:
+        updated_params.pop("ff_state_W")
+        updated_params.pop("ff_state_b")
 
     logging.info('Computing gradient...')
     grads = tensor.grad(cost, wrt=itemlist(updated_params))
@@ -1726,7 +1877,7 @@ def train(dim_word=512,  # word vector dimensionality
 
                     params = unzip_from_theano(tparams, excluding_prefix='prior_')
                     optimizer_params = unzip_from_theano(optimizer_tparams, excluding_prefix='prior_')
-                    save(params, optimizer_params, training_progress, saveto_uidx)
+                    save(params, None, training_progress, saveto_uidx)
                     logging.info('Done')
 
             # generate some samples with the model and display them
@@ -1879,7 +2030,13 @@ def train(dim_word=512,  # word vector dimensionality
                 logging.info('Done')
                 # p_validation = Popen([external_validation_script], shell=True)
                 print '%s %s %s' % (external_validation_script, saveto_uidx, saveto_trans)
-                p_validation = Popen(['%s %s %s' % (external_validation_script, saveto_uidx, saveto_trans)], shell=True)
+
+                env = os.environ
+                # hack to ignore Theano's one-process-per-GPU check
+
+                if 'THEANO_GPU_IS_ALREADY_ACTIVE' in env:
+                    del env['THEANO_GPU_IS_ALREADY_ACTIVE']
+                p_validation = Popen(['%s %s %s' % (external_validation_script, saveto_uidx, saveto_trans)], shell=True, env=env)
                 # training_progress.load_from_json(training_progress_file)
 
             # finish after this many updates
@@ -2011,6 +2168,24 @@ if __name__ == '__main__':
                          help="use subtractive loss on past or(and) future layer during training phase (default: %(default)s)")
     network.add_argument('--use_testing_loss', action="store_true",
                          help="use subtractive loss on past or(and) future layer during testing phase (default: %(default)s)")
+    network.add_argument('--tie_delta_and_ctx', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--delta_attention', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--context_prediction', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--source_prediction', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--predict_prev', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--wpe', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--wpd', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--transition_control', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
+    network.add_argument('--zero_initialization', action="store_true",
+                         help="tie delta and ctx through euclidean distance (default: %(default)s)")
 
     training = parser.add_argument_group('training parameters')
     training.add_argument('--maxlen', type=int, default=100, metavar='INT',

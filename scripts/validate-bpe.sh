@@ -22,16 +22,12 @@ THEANO_FLAGS=mode=FAST_RUN,floatX=float32,device=$device,on_unused_input=warn py
      -k 12 -n -p 2
 
 
-#bash ./postprocess-dev.sh < tmp_trans/$saveto > tmp_trans/$saveto.post
-## for zh-en convention, use case-insensitive bleu
-#cp tmp_trans/$saveto tmp_trans/$saveto.post
-
-sed 's/\@\@ //g' < tmp_trans/$saveto > tmp_trans/$saveto.post
+bash ./postprocess-dev.sh < tmp_trans/$saveto > tmp_trans/$saveto.post
 
 ## get BLEU
 BEST=`cat tmp_trans/best_bleu || echo 0`
-perl ../utils/multi-bleu.perl $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
-BLEU=`perl ../utils/multi-bleu.perl $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
+perl ../utils/multi-bleu-detok.perl $ref < tmp_trans/$saveto.post >> tmp_trans/bleu_scores
+BLEU=`perl ../utils/multi-bleu-detok.perl $ref < tmp_trans/$saveto.post | cut -f 3 -d ' ' | cut -f 1 -d ','`
 BETTER=`echo "$BLEU > $BEST" | bc`
 
 echo "$saveto BLEU = $BLEU"
